@@ -96,13 +96,31 @@ class SiSNR(Metric):
         return first > second
 
     def _compute(self, samples, real_samples, epoch_num, epoch_info):
-        alpha = (samples * real_samples).sum(-1, keepdims=True) / (
-            real_samples.square().sum(-1, keepdims=True) + 1e-9
-        )
-        real_samples_scaled = alpha * real_samples
-        e_target = real_samples_scaled.square().sum(-1)
-        e_res = (real_samples_scaled - samples).square().sum(-1)
-        sisnr = 10 * torch.log10(e_target / (e_res + 1e-9)).cpu().numpy()
+        # degraded_path = "/media/md01/home/hualing/Undiff/results/source_separation_inference/degraded"
+        # for file in os.listdir(degraded_path):
+
+        sisnr_list = []
+        sample_list = []
+        # sample_list.append(torch.cat((samples, samples), dim=-1)) # degraded_sample copy and concate
+        sample_list.append(samples)
+        length = samples.size(-1)
+        cut_point = length // 2
+
+        sample_1 = samples[..., :cut_point]
+        sample_2 = samples[..., cut_point:]
+        sample_list.append(torch.cat((sample_2, sample_1), dim=-1))
+
+        for sample in sample_list:
+            alpha = (sample * real_samples).sum(-1, keepdims=True) / (
+                real_samples.square().sum(-1, keepdims=True) + 1e-9
+            )
+            real_samples_scaled = alpha * real_samples
+            e_target = real_samples_scaled.square().sum(-1)
+            e_res = (real_samples_scaled - sample).square().sum(-1)
+            _sisnr = 10 * torch.log10(e_target / (e_res + 1e-9)).cpu().numpy()
+            sisnr_list.append(_sisnr)
+
+        sisnr = max(sisnr_list)
 
         self.result["mean"] = np.mean(sisnr)
         self.result["std"] = np.std(sisnr)

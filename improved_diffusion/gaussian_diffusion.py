@@ -10,11 +10,15 @@ import math
 import numpy as np
 import torch
 import torch as th
+import torchaudio
+import torch.nn.functional as F
+from speechbrain.inference.speaker import EncoderClassifier
 
 from .losses import discretized_gaussian_log_likelihood, normal_kl
 from .nn import mean_flat
 from .tasks import TaskType
 
+classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
 
 def get_named_beta_schedule(schedule_name, num_diffusion_timesteps):
     """
@@ -969,7 +973,6 @@ def _extract_into_tensor(arr, timesteps, broadcast_shape):
         res = res[..., None]
     return res.expand(broadcast_shape)
 
-
 class CorrectorVPConditional:
     def __init__(self, degradation, xi, sde, snr, score_fn, device):
         self.degradation = degradation
@@ -996,7 +999,8 @@ class CorrectorVPConditional:
                 eps = self.score_fn(x, self.sde._scale_timesteps(t))
 
             if condition is None:
-                condition = y - (x[:, :, : y.size(-1)] + x[:, :, y.size(-1) :])
+                # condition = y - (x[:, :, : y.size(-1)] + x[:, :, y.size(-1) :])
+                condition = y -(x[: y.size(0) , :, :] + x[y.size(0) :, :, :]) # modify
             if source_separation:
                 x = self.langevin_corrector_sliced(x, t, eps, y, condition)
             else:
@@ -1009,22 +1013,44 @@ class CorrectorVPConditional:
             coefficient = 0.5
             total_log_sum = 0
 
-            for i in range(steps):
+            for i in range(steps): # 把抽 embedding 寫在這
                 new_samples = []
                 log_p_y_x = y - (
-                    x_prev[:, :, : y.size(-1)] + x_prev[:, :, y.size(-1) :]
+                    # x_prev[:, :, : y.size(-1)] + x_prev[:, :, y.size(-1) :]
+                    x_prev[: y.size(0), :, :] + x_prev[y.size(0) :, :, :]
                 )
                 total_log_sum += log_p_y_x
+
+                # add f(x)
+                x_prev.requires_grad_(True)
+                embeddings = classifier.encode_batch(x_prev.squeeze(1))
+                num_speakers = embeddings.size(0) // y.size(0)
+
+                similarity = 0
+                for i in range(num_speakers):
+                    for j in range(i + 1, num_speakers):
+                        embedding_1 = embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
+                        embedding_2 = embeddings[j * y.size(0):(j + 1) * y.size(0), ...]
+                        sim = F.cosine_similarity(embedding_1, embedding_2, dim=-1)
+                        similarity += sim
+
+                # gradient
+                similarity.backward()
+                grad = x_prev.grad
+                grad = F.normalize(grad, dim=-1)
+
+                # update new_samples
                 start = 0
-                end = y.size(-1)
-                while end <= x_prev.size(-1):
+                end = y.size(0) # check
+                while end <= x_prev.size(0):
                     new_sample = (
-                        x["sample"][:, :, start:end] + coefficient * total_log_sum
+                        x["sample"][start:end, :, :] + coefficient * (total_log_sum + grad[start:end, :, :])
+                        # x["sample"][start:end, :, :] + coefficient * total_log_sum
                     )
                     new_samples.append(new_sample)
                     start = end
-                    end += y.size(-1)
-                x_prev = torch.cat(new_samples, dim=-1)
+                    end += y.size(0)
+                x_prev = torch.cat(new_samples, dim=0)
             condition = None
 
         else:
@@ -1063,7 +1089,8 @@ class CorrectorVPConditional:
         start = 0
         end = y.size(-1)
         while end <= x.size(-1):
-            score = self.recip_alphas[t] * eps[:, :, start:end]
+            # score = self.recip_alphas[t] * eps[:, :, start:end]
+            score = torch.einsum("b,b...->b...", self.recip_alphas[t], eps[:, :, start:end])
             noise = torch.randn_like(x[:, :, start:end], device=x.device)
             grad_norm = torch.norm(score.reshape(score.shape[0], -1), dim=-1).mean()
             noise_norm = torch.norm(noise.reshape(noise.shape[0], -1), dim=-1).mean()
@@ -1072,9 +1099,14 @@ class CorrectorVPConditional:
             score_to_use = score + condition if condition is not None else score
             x_new = (
                 x[:, :, start:end]
-                + step_size * score_to_use
-                + torch.sqrt(2 * step_size) * noise
+                + torch.einsum("b,b...->b...", step_size, score_to_use)
+                + torch.einsum("b,b...->b...", torch.sqrt(2 * step_size), noise)
             )
+            # x_new = (
+            #     x[:, :, start:end]
+            #     + step_size * score_to_use
+            #     + torch.sqrt(2 * step_size) * noise
+            # )
             corrected_samples.append(x_new)
             start = end
             end += y.size(-1)
