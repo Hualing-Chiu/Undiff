@@ -1,11 +1,11 @@
 defaults:
-  - task: bwe
+  - task: source_separation
   - model: diffwave
   - diffusion: gaussian_diffusion
   - _self_
 
-output_dir: results
-audio_dir: ???
+output_dir: results/source_separation_inference
+audio_dir: /media/md01/public_datasets/VCTK-Corpus-0.92/wav16_silence_trimmed
 use_ema: false
 segment_size: null
 sampling_rate: 16000
