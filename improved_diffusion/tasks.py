@@ -216,6 +216,7 @@ class BaseInverseTask(UnconditionalTask):
                 orig_x=x,
                 progress=True,
                 degradation=self.degradation,
+                task_args=None
             ).cpu()
 
             x = x.cpu()
@@ -383,49 +384,55 @@ class SourceSeparationTask(BaseInverseTask):
         return x[: x.size(0) // 2, :, :] + x[x.size(0) // 2 :, :, :]
         # return x[:, :, : x.size(-1) // 2] + x[:, :, x.size(-1) // 2 :]
 
-    # def inference(
-    #     self,
-    #     audio_files: List[str],
-    #     model: torch.nn.Module,
-    #     diffusion,
-    #     target_sample_rate: int = 16000,
-    #     segment_size: Optional[int] = None,
-    #     device: str = "cpu",
-    # ):
-    #     assert self.task_type != TaskType.UNCONDITIONAL  # inverse tasks only
-    #     files_dict = self.prepare_data(audio_files)
+    def inference(
+        self,
+        audio_files: List[str],
+        model: torch.nn.Module,
+        diffusion,
+        target_sample_rate: int = 16000,
+        segment_size: Optional[int] = None,
+        device: str = "cpu",
+    ):
+        assert self.task_type != TaskType.UNCONDITIONAL  # inverse tasks only
+        files_dict = self.prepare_data(audio_files)
 
-    #     fake_samples = []
-    #     real_samples = []
-    #     mix_samples = []
+        fake_samples = []
+        real_samples = []
+        files_key = list(files_dict.keys())
 
-    #     # for i, f in enumerate(zip(*files_dict.values())):
-    #     #     x = self.load_audios(f, target_sample_rate, segment_size, device)
-    #     #     x = self.prepare_audio_before_degradation(x)
+        for i, f in enumerate(zip(*files_dict.values())): # f 是路徑tuple
+            x = self.load_audios(f, target_sample_rate, segment_size, device)
+            x = self.prepare_audio_before_degradation(x)
 
-    #     #     degraded_sample = self.degradation(x).cpu()
-    #     #     sample = diffusion.p_sample_loop(
-    #     #         model,
-    #     #         x.shape,
-    #     #         clip_denoised=False,
-    #     #         model_kwargs={},
-    #     #         sample_method=self.task_type,
-    #     #         orig_x=x,
-    #     #         progress=True,
-    #     #         degradation=self.degradation,
-    #     #     ).cpu()
+            degraded_sample = self.degradation(x).cpu()
 
-    #         x = x.cpu()
-    #         real_samples.append(x)
-    #         # fake_samples.append(sample)
-    #         # mix_samples.append(degraded_sample)
+            reference_1 = random.choice([file for file in files_dict[files_key[0]] if file not in f[0]])
+            reference_2 = random.choice([file for file in files_dict[files_key[1]] if file not in f[1]])
+            reference_f = (reference_1, reference_2)
+            r_x = self.load_audios(reference_f, target_sample_rate, segment_size, device)
+            r_x = torch.stack(r_x, dim=0)
 
-    #         # self.save_audios(sample, degraded_sample, x, i, sr=target_sample_rate)
+            sample = diffusion.p_sample_loop(
+                model,
+                x.shape,
+                clip_denoised=False,
+                model_kwargs={},
+                sample_method=self.task_type,
+                orig_x=x,
+                progress=True,
+                degradation=self.degradation,
+                task_args= {'reference', r_x}
+            )
+            x = x.cpu()
+            real_samples.append(x)
+            fake_samples.append(sample)
 
-    #         # del sample, x, degraded_sample
-    #         torch.cuda.empty_cache()
+            self.save_audios(sample, degraded_sample, x, i, sr=target_sample_rate)
 
-    #     scores = calculate_all_metrics(
-    #         mix_samples, self.metrics, reference_wavs=real_samples # fake_samples -> mix_samples
-    #     )
-    #     log_results(results_dir=self.output_dir, res=scores)
+            del sample, x, degraded_sample
+            torch.cuda.empty_cache()
+
+        scores = calculate_all_metrics(
+            fake_samples, self.metrics, reference_wavs=real_samples
+        )
+        log_results(results_dir=self.output_dir, res=scores)

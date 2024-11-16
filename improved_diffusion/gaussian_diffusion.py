@@ -442,6 +442,7 @@ class GaussianDiffusion:
         orig_x=None,
         degradation=None,
         use_rg_bwe: bool = False,
+        task_args=None
     ):
         """
         Generate samples from the model.
@@ -484,6 +485,7 @@ class GaussianDiffusion:
             orig_x=orig_x,
             degradation=degradation,
             use_rg_bwe=use_rg_bwe,
+            task_args=task_args
         ):
             final = sample
 
@@ -508,6 +510,7 @@ class GaussianDiffusion:
         measurement=None,
         measurement_cond_fn=None,
         use_rg_bwe: bool = False,
+        task_args=None
     ):
         """
         Generate samples from the model and yield intermediate samples from
@@ -569,7 +572,7 @@ class GaussianDiffusion:
                 if i != 199:
                     y = degradation(orig_x)
                     img = corrector.update_fn_adaptive(
-                        None, img, t, y, threshold=200, steps=1, source_separation=False
+                        None, img, t, y, threshold=200, steps=1, source_separation=False, task_args=None
                     )
 
             with th.no_grad():
@@ -586,8 +589,9 @@ class GaussianDiffusion:
 
             if sample_method == TaskType.SOURCE_SEPARATION:
                 y = degradation(orig_x)
+                # r_x = task_args['reference']
                 img = corrector.update_fn_adaptive(
-                    out, img, t, y, threshold=150, steps=2, source_separation=True
+                    out, img, t, y, threshold=150, steps=2, source_separation=True, task_args=task_args
                 )
                 out["sample"] = img
 
@@ -986,9 +990,9 @@ class CorrectorVPConditional:
         )
 
     def update_fn_adaptive(
-        self, x, x_prev, t, y, threshold=150, steps=1, source_separation=False
+        self, x, x_prev, t, y, threshold=150, steps=1, source_separation=False, task_args=None
     ):
-        x, condition = self.update_fn(x, x_prev, t, y, steps, source_separation)
+        x, condition = self.update_fn(x, x_prev, t, y, steps, source_separation, task_args=task_args)
 
         if t[0] < threshold and t[0] > 0:
             if self.sde.input_sigma_t:
@@ -1008,10 +1012,13 @@ class CorrectorVPConditional:
 
         return x
 
-    def update_fn(self, x, x_prev, t, y, steps, source_separation):
+    def update_fn(self, x, x_prev, t, y, steps, source_separation, task_args=None):
         if source_separation:
             coefficient = 0.5
             total_log_sum = 0
+
+            r_x = task_args['reference']
+            r_embeddings = classifier.encode_batch(r_x.squeeze(1))
 
             for i in range(steps): # 把抽 embedding 寫在這
                 new_samples = []
@@ -1022,22 +1029,31 @@ class CorrectorVPConditional:
                 total_log_sum += log_p_y_x
 
                 # add f(x)
+                if self.sde.input_sigma_t:
+                    eps = self.score_fn(
+                        x_prev, _extract_into_tensor(self.sde.beta_variance, t, t.shape)
+                    )
+                else:
+                    eps = self.score_fn(x_prev, self.sde._scale_timesteps(t))
+
+                x_0 = self.sde._predict_xstart_from_eps(x_prev, t, eps)
+                # A_x0 = self.degradation(x_0)
+                embeddings = classifier.encode_batch(x_0.squeeze(1))
+
                 x_prev.requires_grad_(True)
-                embeddings = classifier.encode_batch(x_prev.squeeze(1))
+                # embeddings = classifier.encode_batch(x_prev.squeeze(1))
                 num_speakers = embeddings.size(0) // y.size(0)
 
                 similarity = 0
                 for i in range(num_speakers):
-                    for j in range(i + 1, num_speakers):
-                        embedding_1 = embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
-                        embedding_2 = embeddings[j * y.size(0):(j + 1) * y.size(0), ...]
-                        sim = F.cosine_similarity(embedding_1, embedding_2, dim=-1)
-                        similarity += sim
+                    embedding = embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
+                    r_embedding = r_embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
+                    sim = F.cosine_similarity(embedding, r_embedding, dim=-1)
+                    similarity += sim
 
                 # gradient
-                similarity.backward()
-                grad = x_prev.grad
-                grad = F.normalize(grad, dim=-1)
+                # similarity.backward()
+                grad = torch.autograd.grad(outputs=similarity, inputs=x_prev)[0]
 
                 # update new_samples
                 start = 0
