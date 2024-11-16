@@ -410,7 +410,7 @@ class SourceSeparationTask(BaseInverseTask):
             reference_2 = random.choice([file for file in files_dict[files_key[1]] if file not in f[1]])
             reference_f = (reference_1, reference_2)
             r_x = self.load_audios(reference_f, target_sample_rate, segment_size, device)
-            r_x = torch.stack(r_x, dim=0)
+            r_x = self.prepare_audio_before_degradation(r_x)
 
             sample = diffusion.p_sample_loop(
                 model,
@@ -421,7 +421,7 @@ class SourceSeparationTask(BaseInverseTask):
                 orig_x=x,
                 progress=True,
                 degradation=self.degradation,
-                task_args= {'reference', r_x}
+                task_args= {'reference': r_x}
             )
             x = x.cpu()
             real_samples.append(x)
