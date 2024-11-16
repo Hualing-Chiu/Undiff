@@ -1040,7 +1040,7 @@ class CorrectorVPConditional:
                 # A_x0 = self.degradation(x_0)
                 embeddings = classifier.encode_batch(x_0.squeeze(1))
 
-                x_prev.requires_grad_(True)
+                # x_prev.requires_grad_(True)
                 # embeddings = classifier.encode_batch(x_prev.squeeze(1))
                 num_speakers = embeddings.size(0) // y.size(0)
 
