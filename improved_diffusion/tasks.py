@@ -11,7 +11,7 @@ from improved_diffusion import bwe_utils, declipping_utils
 from improved_diffusion.datasets.utils import cut_audio_segment, mel_spectrogram
 from improved_diffusion.inference_utils import calculate_all_metrics, log_results
 from improved_diffusion.metrics import Metric
-
+import gc
 
 class TaskType(Enum):
     BWE = auto()
@@ -422,15 +422,16 @@ class SourceSeparationTask(BaseInverseTask):
                 progress=True,
                 degradation=self.degradation,
                 task_args= {'reference': r_x}
-            )
+            ).cpu()
             x = x.cpu()
             real_samples.append(x)
             fake_samples.append(sample)
 
             self.save_audios(sample, degraded_sample, x, i, sr=target_sample_rate)
 
-            del sample, x, degraded_sample
+            del sample, x, degraded_sample, r_x
             torch.cuda.empty_cache()
+            gc.collect()
 
         scores = calculate_all_metrics(
             fake_samples, self.metrics, reference_wavs=real_samples
