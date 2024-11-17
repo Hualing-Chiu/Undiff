@@ -544,7 +544,7 @@ class GaussianDiffusion:
             xi = 0.01
         elif sample_method == TaskType.SOURCE_SEPARATION:
             snr = 0.00001
-            xi = None
+            xi = 0.01
 
         # define corrector (as in predictor-corrector sampling)
         if sample_method == TaskType.UNCONDITIONAL:
@@ -1021,6 +1021,7 @@ class CorrectorVPConditional:
             r_embeddings = classifier.encode_batch(r_x.squeeze(1))
 
             for i in range(steps): # 把抽 embedding 寫在這
+                x_prev.requires_grad_(True)
                 new_samples = []
                 log_p_y_x = y - (
                     # x_prev[:, :, : y.size(-1)] + x_prev[:, :, y.size(-1) :]
@@ -1040,7 +1041,7 @@ class CorrectorVPConditional:
                 # A_x0 = self.degradation(x_0)
                 embeddings = classifier.encode_batch(x_0.squeeze(1))
 
-                # x_prev.requires_grad_(True)
+                
                 # embeddings = classifier.encode_batch(x_prev.squeeze(1))
                 num_speakers = embeddings.size(0) // y.size(0)
 
@@ -1049,12 +1050,19 @@ class CorrectorVPConditional:
                     embedding = embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
                     r_embedding = r_embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
                     sim = F.cosine_similarity(embedding, r_embedding, dim=-1)
-                    similarity += sim
+                    similarity = similarity + sim
 
                 # gradient
                 # similarity.backward()
+                similarity = similarity.sum()
                 grad = torch.autograd.grad(outputs=similarity, inputs=x_prev)[0]
-
+                norm_grad = torch.linalg.norm(grad) / (x_0.size(-1) ** 0.5)
+                sigma = torch.sqrt(self.alphas[t])
+                s = self.xi / (norm_grad * sigma + 1e-6)
+                # print(grad.shape)
+                # print(s.shape)
+                # grad = s * grad
+                grad = torch.vmap(lambda x, y: x*y)(grad, s)
                 # update new_samples
                 start = 0
                 end = y.size(0) # check
@@ -1066,7 +1074,7 @@ class CorrectorVPConditional:
                     new_samples.append(new_sample)
                     start = end
                     end += y.size(0)
-                x_prev = torch.cat(new_samples, dim=0)
+                x_prev = torch.cat(new_samples, dim=0).detach()
             condition = None
 
         else:
