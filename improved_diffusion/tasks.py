@@ -12,6 +12,14 @@ from improved_diffusion.datasets.utils import cut_audio_segment, mel_spectrogram
 from improved_diffusion.inference_utils import calculate_all_metrics, log_results
 from improved_diffusion.metrics import Metric
 import gc
+from torch.cuda.amp import autocast
+# from speechbrain.inference.speaker import EncoderClassifier
+from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model, Wav2Vec2ForSequenceClassification
+
+# classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
+model_name = "superb/wav2vec2-base-superb-sid"
+feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
+wav2vec = Wav2Vec2ForSequenceClassification.from_pretrained(model_name).to('cuda')
 
 class TaskType(Enum):
     BWE = auto()
@@ -380,9 +388,11 @@ class SourceSeparationTask(BaseInverseTask):
             os.path.join(self.degraded_path, name), degraded_sample.view(1, -1), sr
         )
 
-    def degradation(self, x: torch.Tensor) -> torch.Tensor:
-        return x[: x.size(0) // 2, :, :] + x[x.size(0) // 2 :, :, :]
+    # def degradation(self, x: torch.Tensor) -> torch.Tensor:
+    #     return x[: x.size(0) // 2, :, :] + x[x.size(0) // 2 :, :, :]
         # return x[:, :, : x.size(-1) // 2] + x[:, :, x.size(-1) // 2 :]
+    def degradation(self, x: torch.Tensor) -> torch.Tensor:
+         return torch.stack([s for s in torch.chunk(x, 2, dim=0)]).sum(0)
 
     def inference(
         self,
@@ -403,7 +413,7 @@ class SourceSeparationTask(BaseInverseTask):
         for i, f in enumerate(zip(*files_dict.values())): # f 是路徑tuple
             x = self.load_audios(f, target_sample_rate, segment_size, device)
             x = self.prepare_audio_before_degradation(x)
-
+            print(x.shape)
             degraded_sample = self.degradation(x).cpu()
 
             reference_1 = random.choice([file for file in files_dict[files_key[0]] if file not in f[0]])
@@ -411,6 +421,16 @@ class SourceSeparationTask(BaseInverseTask):
             reference_f = (reference_1, reference_2)
             r_x = self.load_audios(reference_f, target_sample_rate, segment_size, device)
             r_x = self.prepare_audio_before_degradation(r_x)
+            f_e = feature_extractor(r_x.squeeze(1), return_tensors="pt", sampling_rate=16000)
+            print(f_e.input_values.shape)
+            with torch.no_grad():
+                # r_embeddings = classifier.encode_batch(r_x.squeeze(1))
+                o = wav2vec(f_e.input_values.squeeze(0).to(device))
+                r_embeddings = o.logits
+                # r_embeddings = r_embeddings.mean(dim=1)
+            print(r_embeddings.shape)
+            torch.cuda.empty_cache()
+            gc.collect()
 
             sample = diffusion.p_sample_loop(
                 model,
@@ -421,15 +441,18 @@ class SourceSeparationTask(BaseInverseTask):
                 orig_x=x,
                 progress=True,
                 degradation=self.degradation,
-                task_args= {'reference': r_x}
+                task_args= {'reference': r_embeddings}
             ).cpu()
             x = x.cpu()
             real_samples.append(x)
             fake_samples.append(sample)
 
+            # calculate each sample's Si-SNR
+            
+
             self.save_audios(sample, degraded_sample, x, i, sr=target_sample_rate)
 
-            del sample, x, degraded_sample, r_x
+            del sample, x, degraded_sample, reference_1, reference_2, reference_f, r_x, r_embeddings
             torch.cuda.empty_cache()
             gc.collect()
 
@@ -437,3 +460,22 @@ class SourceSeparationTask(BaseInverseTask):
             fake_samples, self.metrics, reference_wavs=real_samples
         )
         log_results(results_dir=self.output_dir, res=scores)
+
+# def _compute(self, samples, real_samples):
+#     # 確保樣本的尺寸相同
+#     assert samples.size(-1) == real_samples.size(-1), "Sample and real samples must have the same length."
+
+#     # 計算 alpha
+#     alpha = (samples * real_samples).sum(-1, keepdims=True) / (
+#         real_samples.square().sum(-1, keepdims=True) + 1e-9
+#     )
+#     real_samples_scaled = alpha * real_samples
+
+#     # 計算目標能量和殘差能量
+#     e_target = real_samples_scaled.square().sum(-1)
+#     e_res = (real_samples_scaled - samples).square().sum(-1)
+
+#     # 計算 Si-SNR
+#     sisnr = 10 * torch.log10(e_target / (e_res + 1e-9)).cpu().numpy()
+
+#     return sisnr

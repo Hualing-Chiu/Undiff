@@ -12,13 +12,17 @@ import torch
 import torch as th
 import torchaudio
 import torch.nn.functional as F
-from speechbrain.inference.speaker import EncoderClassifier
+# from speechbrain.inference.speaker import EncoderClassifier
+from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model, Wav2Vec2ForSequenceClassification
 
 from .losses import discretized_gaussian_log_likelihood, normal_kl
 from .nn import mean_flat
 from .tasks import TaskType
 
-classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
+# classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
+model_name = "superb/wav2vec2-base-superb-sid"
+feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
+wav2vec = Wav2Vec2ForSequenceClassification.from_pretrained(model_name).to('cuda')
 
 def get_named_beta_schedule(schedule_name, num_diffusion_timesteps):
     """
@@ -1004,7 +1008,9 @@ class CorrectorVPConditional:
 
             if condition is None:
                 # condition = y - (x[:, :, : y.size(-1)] + x[:, :, y.size(-1) :])
-                condition = y -(x[: y.size(0) , :, :] + x[y.size(0) :, :, :]) # modify
+                # condition = y -(x[: y.size(0) , :, :] + x[y.size(0) :, :, :]) # modify
+                n_spk = x.size(0) // y.size(0)
+                condition = torch.vmap(lambda x,y:x*y)(y, torch.tensor(self.sde.sqrt_alphas_cumprod, device=t.device)[t[:y.size(0)]]) - torch.stack(torch.chunk(x, n_spk, 0)).sum(0)
             if source_separation:
                 x = self.langevin_corrector_sliced(x, t, eps, y, condition)
             else:
@@ -1017,15 +1023,19 @@ class CorrectorVPConditional:
             coefficient = 0.5
             total_log_sum = 0
 
-            r_x = task_args['reference']
-            r_embeddings = classifier.encode_batch(r_x.squeeze(1))
+            # r_x = task_args['reference']
+            # r_embeddings = classifier.encode_batch(r_x.squeeze(1))
+            r_embeddings = task_args['reference']
 
             for i in range(steps): # 把抽 embedding 寫在這
-                x_prev.requires_grad_(True)
+                # x_prev.requires_grad_(True)
                 new_samples = []
-                log_p_y_x = y - (
-                    # x_prev[:, :, : y.size(-1)] + x_prev[:, :, y.size(-1) :]
-                    x_prev[: y.size(0), :, :] + x_prev[y.size(0) :, :, :]
+                # log_p_y_x = y - (
+                #     x_prev[:, :, : y.size(-1)] + x_prev[:, :, y.size(-1) :]
+                # )
+                n_spk = x_prev.size(0) // y.size(0)
+                log_p_y_x = torch.vmap(lambda x,y:x*y)(y, torch.tensor(self.sde.sqrt_alphas_cumprod, device=t.device)[t[:y.size(0)]]) - (
+                    torch.stack(torch.chunk(x_prev, n_spk, 0)).sum(0)
                 )
                 total_log_sum += log_p_y_x
 
@@ -1038,31 +1048,38 @@ class CorrectorVPConditional:
                     eps = self.score_fn(x_prev, self.sde._scale_timesteps(t))
 
                 x_0 = self.sde._predict_xstart_from_eps(x_prev, t, eps)
-                # A_x0 = self.degradation(x_0)
-                embeddings = classifier.encode_batch(x_0.squeeze(1))
-
-                
+                x_0.requires_grad_(True)
+                # embeddings = classifier.encode_batch(x_0.squeeze(1))       
                 # embeddings = classifier.encode_batch(x_prev.squeeze(1))
-                num_speakers = embeddings.size(0) // y.size(0)
+                f_e = (x_0 - x_0.mean(-1, keepdim=True))/x_0.std(-1, keepdim=True)
+                # f_e= feature_extractor(x_0.squeeze(1), return_tensors="pt", sampling_rate=16000)
+                o= wav2vec(f_e.squeeze(1))
+                embeddings = o.logits # last_hidden_state to logits
+                    # embeddings = r_embeddings.mean(dim=1)
+
+                # n_spk = embeddings.size(0) // y.size(0)
 
                 similarity = 0
-                for i in range(num_speakers):
+                for i in range(n_spk):
                     embedding = embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
                     r_embedding = r_embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
-                    sim = F.cosine_similarity(embedding, r_embedding, dim=-1)
-                    similarity = similarity + sim
+                    # sim = F.cosine_similarity(embedding, r_embedding, dim=-1)
+                    # loss = F.mse_loss(embedding, r_embedding, reduction='sum')
+                    # loss = F.l1_loss(embedding, r_embedding, reduction='mean')
+                    loss = F.l1_loss(embedding, r_embedding, reduction='mean')
+                    similarity = similarity + loss
 
                 # gradient
-                # similarity.backward()
-                similarity = similarity.sum()
-                grad = torch.autograd.grad(outputs=similarity, inputs=x_prev)[0]
-                norm_grad = torch.linalg.norm(grad) / (x_0.size(-1) ** 0.5)
-                sigma = torch.sqrt(self.alphas[t])
-                s = self.xi / (norm_grad * sigma + 1e-6)
-                # print(grad.shape)
-                # print(s.shape)
+                print(f"similarity: {similarity}")
+                similarity = similarity.mean()
+                grad = torch.autograd.grad(outputs=similarity, inputs=x_0)[0]
+                norm_grad = torch.vmap(torch.linalg.norm)(grad) / (x_0.size(-1) ** 0.5)
+                # sigma = torch.sqrt(self.alphas[t])
+                s = self.xi / (norm_grad * torch.tensor(self.sde.sqrt_alphas_cumprod).to(t.device)[t] + 1e-6)
                 # grad = s * grad
                 grad = torch.vmap(lambda x, y: x*y)(grad, s)
+                # alpha = self.sde.q_sample(x_0, t, torch.zeros_like(x_0))
+                
                 # update new_samples
                 start = 0
                 end = y.size(0) # check
@@ -1076,7 +1093,6 @@ class CorrectorVPConditional:
                     end += y.size(0)
                 x_prev = torch.cat(new_samples, dim=0).detach()
             condition = None
-
         else:
             for i in range(steps):
                 if self.sde.input_sigma_t:
@@ -1106,7 +1122,7 @@ class CorrectorVPConditional:
                 x_prev = x_prev - s * condition
         return x_prev.float(), condition
 
-    def langevin_corrector_sliced(self, x, t, eps, y, condition=None):
+    def langevin_corrector_sliced(self, x, t, eps, y, condition=None): # need modity
         alpha = self.alphas[t]
         corrected_samples = []
 
@@ -1135,7 +1151,7 @@ class CorrectorVPConditional:
             start = end
             end += y.size(-1)
 
-        return torch.cat(corrected_samples, dim=-1).float()
+        return torch.cat(corrected_samples, dim=0).float() # dim=-1 to dim=0
 
     def langevin_corrector(self, x, t, eps, y, condition=None):
         alpha = self.alphas[t]
