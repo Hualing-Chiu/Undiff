@@ -423,6 +423,7 @@ class SourceSeparationTask(BaseInverseTask):
             r_x = self.prepare_audio_before_degradation(r_x)
             f_e = feature_extractor(r_x.squeeze(1), return_tensors="pt", sampling_rate=16000)
             print(f_e.input_values.shape)
+
             with torch.no_grad():
                 # r_embeddings = classifier.encode_batch(r_x.squeeze(1))
                 o = wav2vec(f_e.input_values.squeeze(0).to(device))
@@ -441,7 +442,7 @@ class SourceSeparationTask(BaseInverseTask):
                 orig_x=x,
                 progress=True,
                 degradation=self.degradation,
-                task_args= {'reference': r_embeddings}
+                task_args= {'reference': r_embeddings, 'ground_truth': x}
             ).cpu()
             x = x.cpu()
             real_samples.append(x)

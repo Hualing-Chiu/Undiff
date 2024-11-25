@@ -1026,6 +1026,7 @@ class CorrectorVPConditional:
             # r_x = task_args['reference']
             # r_embeddings = classifier.encode_batch(r_x.squeeze(1))
             r_embeddings = task_args['reference']
+            ground_truth_x = task_args['ground_truth']
 
             for i in range(steps): # 把抽 embedding 寫在這
                 # x_prev.requires_grad_(True)
@@ -1051,41 +1052,49 @@ class CorrectorVPConditional:
                 x_0.requires_grad_(True)
                 # embeddings = classifier.encode_batch(x_0.squeeze(1))       
                 # embeddings = classifier.encode_batch(x_prev.squeeze(1))
-                f_e = (x_0 - x_0.mean(-1, keepdim=True))/x_0.std(-1, keepdim=True)
+                f_e = (x_0 - x_0.mean(-1, keepdim=True)) / x_0.std(-1, keepdim=True)
                 # f_e= feature_extractor(x_0.squeeze(1), return_tensors="pt", sampling_rate=16000)
-                o= wav2vec(f_e.squeeze(1))
+                o = wav2vec(f_e.squeeze(1))
                 embeddings = o.logits # last_hidden_state to logits
-                    # embeddings = r_embeddings.mean(dim=1)
 
                 # n_spk = embeddings.size(0) // y.size(0)
 
-                similarity = 0
+                similarity_1 = 0
+                similarity_2 = 0
                 for i in range(n_spk):
                     embedding = embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
                     r_embedding = r_embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
+                    g_x = ground_truth_x[i * y.size(0):(i + 1) * y.size(0), ...]
+                    wav_x = x_0[i * y.size(0):(i + 1) * y.size(0), ...]
                     # sim = F.cosine_similarity(embedding, r_embedding, dim=-1)
                     # loss = F.mse_loss(embedding, r_embedding, reduction='sum')
                     # loss = F.l1_loss(embedding, r_embedding, reduction='mean')
-                    loss = F.l1_loss(embedding, r_embedding, reduction='mean')
-                    similarity = similarity + loss
+
+                    # ground truth wav & wav
+                    loss_g_x = F.mse_loss(wav_x, g_x, reduction='mean')
+                    # similarity_1 = similarity_1 + loss
+                    similarity_2 = similarity_2 + loss_g_x
 
                 # gradient
-                print(f"similarity: {similarity}")
-                similarity = similarity.mean()
-                grad = torch.autograd.grad(outputs=similarity, inputs=x_0)[0]
-                norm_grad = torch.vmap(torch.linalg.norm)(grad) / (x_0.size(-1) ** 0.5)
+                # print(f"similarity_1: {similarity_1}")
+                print(f"similarity_2: {similarity_2}")
+                # similarity_1 = similarity_1.mean()
+                similarity_2 = similarity_2.mean()
+                # grad_1 = torch.autograd.grad(outputs=similarity_1, inputs=x_0)[0]
+                # norm_grad = torch.vmap(torch.linalg.norm)(grad_1) / (x_0.size(-1) ** 0.5)
                 # sigma = torch.sqrt(self.alphas[t])
-                s = self.xi / (norm_grad * torch.tensor(self.sde.sqrt_alphas_cumprod).to(t.device)[t] + 1e-6)
+                # s = self.xi / (norm_grad * torch.tensor(self.sde.sqrt_alphas_cumprod).to(t.device)[t] + 1e-6)
                 # grad = s * grad
-                grad = torch.vmap(lambda x, y: x*y)(grad, s)
+                # grad_1 = torch.vmap(lambda x, y: x*y)(grad_1, s)
                 # alpha = self.sde.q_sample(x_0, t, torch.zeros_like(x_0))
-                
+                grad_2 = torch.autograd.grad(outputs=similarity_2, inputs=x_0)[0]
+
                 # update new_samples
                 start = 0
                 end = y.size(0) # check
                 while end <= x_prev.size(0):
                     new_sample = (
-                        x["sample"][start:end, :, :] + coefficient * (total_log_sum + grad[start:end, :, :])
+                        x["sample"][start:end, :, :] + coefficient * (total_log_sum - grad_2[start:end, :, :])
                         # x["sample"][start:end, :, :] + coefficient * total_log_sum
                     )
                     new_samples.append(new_sample)
