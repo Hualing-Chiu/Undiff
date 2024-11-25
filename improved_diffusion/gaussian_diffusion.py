@@ -1048,8 +1048,8 @@ class CorrectorVPConditional:
                 else:
                     eps = self.score_fn(x_prev, self.sde._scale_timesteps(t))
 
-                x_0 = self.sde._predict_xstart_from_eps(x_prev, t, eps)
-                x_0.requires_grad_(True)
+                x_prev.requires_grad_(True)
+                x_0 = self.sde._predict_xstart_from_eps(x_prev, t, eps.detach())
                 # embeddings = classifier.encode_batch(x_0.squeeze(1))       
                 # embeddings = classifier.encode_batch(x_prev.squeeze(1))
                 f_e = (x_0 - x_0.mean(-1, keepdim=True)) / x_0.std(-1, keepdim=True)
@@ -1080,14 +1080,14 @@ class CorrectorVPConditional:
                 print(f"similarity_2: {similarity_2}")
                 # similarity_1 = similarity_1.mean()
                 similarity_2 = similarity_2.mean()
-                # grad_1 = torch.autograd.grad(outputs=similarity_1, inputs=x_0)[0]
+                # grad_1 = torch.autograd.grad(outputs=similarity_1, inputs=x_prev)[0]
                 # norm_grad = torch.vmap(torch.linalg.norm)(grad_1) / (x_0.size(-1) ** 0.5)
                 # sigma = torch.sqrt(self.alphas[t])
                 # s = self.xi / (norm_grad * torch.tensor(self.sde.sqrt_alphas_cumprod).to(t.device)[t] + 1e-6)
                 # grad = s * grad
                 # grad_1 = torch.vmap(lambda x, y: x*y)(grad_1, s)
                 # alpha = self.sde.q_sample(x_0, t, torch.zeros_like(x_0))
-                grad_2 = torch.autograd.grad(outputs=similarity_2, inputs=x_0)[0]
+                grad_2 = torch.autograd.grad(outputs=similarity_2, inputs=x_prev)[0]
 
                 # update new_samples
                 start = 0
