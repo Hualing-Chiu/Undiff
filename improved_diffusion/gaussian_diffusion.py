@@ -1074,7 +1074,7 @@ class CorrectorVPConditional:
                     # similarity_2 = similarity_2 + loss_g_x
 
                 # gradient
-                # print(f"similarity_1: {similarity_1}")
+                print(f"similarity_1: {similarity_1}")
                 # print(f"similarity_2: {similarity_2}")
                 similarity_1 = similarity_1.mean()
                 # similarity_2 = similarity_2.mean()
@@ -1094,10 +1094,14 @@ class CorrectorVPConditional:
 
                 # update new_samples
                 start = 0
-                end = y.size(0) # check
+                end = y.size(0)
+                weight = 2 * ((t.float() / self.sde.num_timesteps) ** 0.5)
+                grad_1 = torch.vmap(lambda x, y: x*y)(grad_1, weight)
+                # print(f"weight: {weight.shape}")
+                # print(f"grad_1 shape: {grad_1.shape}")
                 while end <= x_prev.size(0):
                     new_sample = (
-                        x["sample"][start:end, :, :] + coefficient * (total_log_sum - grad_1[start:end, :, :])
+                        x["sample"][start:end, :, :] + coefficient * total_log_sum - grad_1[start:end, :, :]
                         # x["sample"][start:end, :, :] + coefficient * total_log_sum
                     )
                     new_samples.append(new_sample)
@@ -1106,10 +1110,9 @@ class CorrectorVPConditional:
                 x_prev = torch.cat(new_samples, dim=0).detach()
 
             log_p_y_x = log_p_y_x.repeat(n_spk, 1, 1)
-            print(f"log_p_y_x shape: {log_p_y_x.shape}")
-            print(f"grad_1 shape: {grad_1.shape}")
-            # condition = None
-            condition = grad_1 + log_p_y_x
+            
+            condition = None
+            # condition = log_p_y_x - 2 * grad_1
         else:
             for i in range(steps):
                 if self.sde.input_sigma_t:
