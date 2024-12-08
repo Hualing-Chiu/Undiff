@@ -421,7 +421,7 @@ class SourceSeparationTask(BaseInverseTask):
             reference_f = (reference_1, reference_2)
             r_x = self.load_audios(reference_f, target_sample_rate, segment_size, device)
             r_x = self.prepare_audio_before_degradation(r_x)
-            f_e = feature_extractor(r_x.squeeze(1), return_tensors="pt", sampling_rate=16000)
+            f_e = feature_extractor(x.squeeze(1), return_tensors="pt", sampling_rate=16000)
             print(f_e.input_values.shape)
 
             with torch.no_grad():

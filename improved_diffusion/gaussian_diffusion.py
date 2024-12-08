@@ -1022,6 +1022,7 @@ class CorrectorVPConditional:
         if source_separation:
             coefficient = 0.5
             total_log_sum = 0
+            total_grad_sum = 0
 
             # r_embeddings = classifier.encode_batch(r_x.squeeze(1))
             r_embeddings = task_args['reference']
@@ -1095,21 +1096,23 @@ class CorrectorVPConditional:
                 # update new_samples
                 start = 0
                 end = y.size(0)
-                weight = 2 * ((t.float() / self.sde.num_timesteps) ** 0.5)
-                grad_1 = torch.vmap(lambda x, y: x*y)(grad_1, weight)
-                # print(f"weight: {weight.shape}")
-                # print(f"grad_1 shape: {grad_1.shape}")
+                # weight_total = 1 - ((t.float() / self.sde.num_timesteps) ** 2)
+                weight_grad = (t.float() / self.sde.num_timesteps) ** 2
+                # weight_grad = 1 / (1 + torch.exp(-5 * (self.sde.num_timesteps - t.float() / self.sde.num_timesteps - 0.5)))
+                grad_1 = torch.vmap(lambda x, y: x*y)(grad_1, weight_grad)
+                total_grad_sum += grad_1
                 while end <= x_prev.size(0):
                     new_sample = (
-                        x["sample"][start:end, :, :] + coefficient * total_log_sum - grad_1[start:end, :, :]
-                        # x["sample"][start:end, :, :] + coefficient * total_log_sum
+                        # x['sample'][start:end, :, :] + torch.vmap(lambda x, y: x*y)(total_log_sum, weight_total[start:end]) - grad_1[start:end, :, :]
+                        x["sample"][start:end, :, :] + coefficient * total_log_sum - total_grad_sum[start:end, :, :]
+                        # x["sample"][start:end, :, :] + coefficient * (total_log_sum - grad_1[start:end, :, :])
                     )
                     new_samples.append(new_sample)
                     start = end
                     end += y.size(0)
                 x_prev = torch.cat(new_samples, dim=0).detach()
 
-            log_p_y_x = log_p_y_x.repeat(n_spk, 1, 1)
+            # log_p_y_x = log_p_y_x.repeat(n_spk, 1, 1)
             
             condition = None
             # condition = log_p_y_x - 2 * grad_1
