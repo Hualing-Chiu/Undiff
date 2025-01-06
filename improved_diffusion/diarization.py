@@ -7,7 +7,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import torchaudio
-from torchsummary import summary
+import torchaudio.transforms as Trans
+# from torchsummary import summary
 from torch.optim.adam import Adam
 
 from collections import OrderedDict
@@ -15,6 +16,7 @@ from collections import OrderedDict
 from scipy.signal import lfilter, stft
 
 from einops import rearrange
+from tqdm import tqdm
 # from improved_diffusion.tasks import TaskType
 
 class VGGM(nn.Module):
@@ -140,8 +142,8 @@ def generate_embeddings(waveform: torch.Tensor, sr, model, device, window_size=1
     segments = F.unfold(waveform[None], (1, segment_samples), stride=(1, step_samples)) 
     segments = rearrange(segments, "t s -> s t") # [45, 16000] [num_segment, length of one segment]
     # total_samples = waveform.shape[1]
-    print(waveform.shape)
-    print(segments.shape)
+    # print(waveform.shape)
+    # print(segments.shape)
 
     # 最少生成3600個片段
     # if segments.size(-1) < min_chunks:
@@ -187,18 +189,44 @@ def project_unitdisk(X: torch.Tensor):
     L2_norm = torch.norm(X, p=2, dim=1, keepdim=True)
     return X / L2_norm
 
+def stretch_waveform(waveform, rate):
+    spectrogram_transform = Trans.Spectrogram(n_fft=1024, hop_length=512, power=None)
+    spectrogram = spectrogram_transform(waveform)
+    stretch = Trans.TimeStretch(n_freq=spectrogram.shape[1], fixed_rate=rate)
+    stretch_spectrogram = stretch(spectrogram)
+    waveform_transform = Trans.InverseSpectrogram(n_fft=1024, hop_length=512)
+    stretched_wavform = waveform_transform(stretch_spectrogram)
+    return stretched_wavform
 
+# cal Si-SNR
+def SiSNR(real_samples, samples):
+    alpha = (samples * real_samples).sum(-1, keepdims=True) / (
+            real_samples.square().sum(-1, keepdims=True) + 1e-9
+    )
+    real_samples_scaled = alpha * real_samples
+    e_target = real_samples_scaled.square().sum(-1)
+    e_res = (real_samples_scaled - samples).square().sum(-1)
+    sisnr = 10 * torch.log10(e_target / (e_res + 1e-9)).cpu().numpy()
+    
+    return sisnr
 
 if __name__=="__main__":    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # load model
     model = VGGM()
     # summary(model.cuda(), input_size=(1, 512, 4096))
-    model.load_state_dict(torch.load('/media/md01/home/hualing/Undiff/weights/VGGM300_BEST_140_81.99.pth', map_location=device), strict=False)
+    model.load_state_dict(torch.load("/home/hualing/Undiff/weights/VGGM300_BEST_140_81.99.pth", map_location=device), strict=False)
     model.to(device)
     # model.eval()
 
-    dir_path = "/media/md01/home/hualing/Undiff/results/source_separation_inference/concatenate"
+    original_path = "/home/hualing/Undiff/results_new_sampling/source_separation_inference/original"
+    generated_path = "/home/hualing/Undiff/results_new_sampling/source_separation_inference/generated"
+    # dir_path = "/media/md01/home/hualing/Undiff/results/source_separation_inference/concatenate"
+    diarization_path = "/home/hualing/Undiff/results_new_sampling/source_separation_inference/diarization"
+            
+    if not os.path.exists(diarization_path):
+        os.makedirs(diarization_path)
+
     audio_data = []
     sr = 16000
     padding_length = int(sr * 0.5) # padding 0.5 sec = 8000
@@ -213,80 +241,173 @@ if __name__=="__main__":
         900: 27,
         1000: 30}
 
-    for filename in os.listdir(dir_path):
-        file_path = os.path.join(dir_path, filename)
-        waveform, sr = torchaudio.load(file_path)
-        print(filename)
-        # 前後 padding 1 sec
-        padding_wavform = F.pad(waveform, (padding_length, padding_length), mode='constant', value=0)
+    files = os.listdir(original_path)
+    N = len(files) // 2
+    print(f"N = {N}")
+    for i in tqdm(range(N)):
+        original_w1, sr = torchaudio.load(os.path.join(original_path, f"Sample_{i}_1.wav"))
+        original_w2, sr = torchaudio.load(os.path.join(original_path, f"Sample_{i}_2.wav"))
+        generated_w1, sr = torchaudio.load(os.path.join(generated_path, f"Sample_{i}_1.wav"))
+        generated_w2, sr = torchaudio.load(os.path.join(generated_path, f"Sample_{i}_2.wav"))
+        original_w = torch.cat([original_w1, original_w2], -1).view(1, 1, -1)
+        generated_ws = [torch.cat([generated_w1, generated_w2], -1).view(1, 1, -1),
+                        torch.cat([generated_w2, generated_w1], -1).view(1, 1, -1)]
 
-        E_norm, segments, permutation = generate_embeddings(padding_wavform, sr, model, device) # (T × M)
-        segments = segments.to(device)
-        # print(E_norm.shape)
+        sisnr = max([SiSNR(original_w, generated_w) for generated_w in generated_ws])
+        if sisnr <= 1:
+            # waveform = generated_ws[0].squeeze(0)
+            stretch_w1 = stretch_waveform(generated_w1, rate=1.5)
+            stretch_w2 = stretch_waveform(generated_w2, rate=1.5)
+            waveform = torch.cat([stretch_w1, stretch_w2], -1)
+            # 前後 padding 1 sec
+            padding_wavform = F.pad(waveform, (padding_length, padding_length), mode='constant', value=0)
 
-        # random two matrix Psi & A
-        T, M = E_norm.shape
-        K = 2 # number of speaker
+            E_norm, segments, permutation = generate_embeddings(padding_wavform, sr, model, device) # (T × M)
+            segments = segments.to(device)
+            # print(E_norm.shape)
 
-        A = torch.randn(T, K, requires_grad=True, device=device)
-        Psi = torch.randn(K, M, requires_grad=True, device=device)
+            # random two matrix Psi & A
+            T, M = E_norm.shape
+            K = 2 # number of speaker
 
-        # define opt
-        opt_A = Adam([A],)
-        opt_Psi = Adam([Psi],)
+            A = torch.randn(T, K, requires_grad=True, device=device)
+            Psi = torch.randn(K, M, requires_grad=True, device=device)
 
-        # print(E_norm)
-        # print(E_norm - torch.einsum("TK,KM->TM", A, Psi)) # 矩陣相乘
-        i = 0
-        while i < 5000:
-            # compute loss
-            L = compute_loss(E_norm, A, Psi, K, T)
-            # calculate gradient of Psi
-            opt_Psi.zero_grad()
-            L.backward(inputs=Psi)
-            opt_Psi.step()
-            # Psi.data = nn.functional.normalize(shrink(Psi), dim=1).data
-            Psi.data = shrink(Psi.data, 1e-4)
-            Psi.data = project_unitdisk(Psi.data)
+            # define opt
+            opt_A = Adam([A],)
+            opt_Psi = Adam([Psi],)
 
-            # recompute loss
-            L = compute_loss(E_norm, A, Psi, K, T)
-            #calculate gradient of A
-            opt_A.zero_grad()
-            L.backward(inputs=A)
-            opt_A.step()
-            A.data = torch.clamp(shrink(A.data, 1e-4), 0, 1).data
-            i = i + 1
+            # print(E_norm)
+            # print(E_norm - torch.einsum("TK,KM->TM", A, Psi)) # 矩陣相乘
+            j = 0
+            while j < 5000:
+                # compute loss
+                L = compute_loss(E_norm, A, Psi, K, T)
+                # calculate gradient of Psi
+                opt_Psi.zero_grad()
+                L.backward(inputs=Psi)
+                opt_Psi.step()
+                # Psi.data = nn.functional.normalize(shrink(Psi), dim=1).data
+                Psi.data = shrink(Psi.data, 1e-4)
+                Psi.data = project_unitdisk(Psi.data)
 
-        # print(E_norm - torch.einsum("TK,KM->TM", A, Psi))
-        # print(A.argmax(-1))
-        # print(A.shape) # [45, 2]
+                # recompute loss
+                L = compute_loss(E_norm, A, Psi, K, T)
+                #calculate gradient of A
+                opt_A.zero_grad()
+                L.backward(inputs=A)
+                opt_A.step()
+                A.data = torch.clamp(shrink(A.data, 1e-4), 0, 1).data
+                j = j + 1
 
-        # print(segments.shape)
-        new_waveform_list = []
-        for k in range(0, K):
-            new_waveform = permutation(segments, (A.argmax(-1) == k))
-            # print(new_waveform.shape)
-            new_waveform = new_waveform.squeeze(1)
-            new_waveform = new_waveform[..., padding_length : -padding_length]
-            # print(new_waveform.shape)
-            chunks = torch.chunk(new_waveform, K, dim=-1)
-            S, T = chunks[0].shape
-            new_chunks = torch.zeros(S, T).to(device)
+            # print(E_norm - torch.einsum("TK,KM->TM", A, Psi))
+            # print(A.argmax(-1))
+            # print(A.shape) # [45, 2]
 
-            for chunk in chunks:
-                new_chunks.data += chunk.data
-            
-            # print(new_chunks.shape)
-            new_waveform_list.append(new_chunks)
+            # print(segments.shape)
+            new_waveform_list = []
+            for k in range(0, K):
+                new_waveform = permutation(segments, (A.argmax(-1) == k))
+                # print(new_waveform.shape)
+                new_waveform = new_waveform.squeeze(1)
+                new_waveform = new_waveform[..., padding_length : -padding_length]
+                # print(new_waveform.shape)
+                chunks = torch.chunk(new_waveform, K, dim=-1)
+                S, T = chunks[0].shape
+                new_chunks = torch.zeros(S, T).to(device)
 
-        new_path = '/media/md01/home/hualing/Undiff/results/source_separation_inference/diarization'
-        
-        if not os.path.exists(new_path):
-            os.makedirs(new_path)
+                for chunk in chunks:
+                    new_chunks.data += chunk.data
+                
+                # print(new_chunks.shape)
+                new_waveform_list.append(new_chunks)
 
-        for i, _waveform in enumerate(new_waveform_list):
-            name = filename[:-4] + f"_{i + 1}.wav"
+            for n, _waveform in enumerate(new_waveform_list):
+                name = f"Sample_{i}_{n + 1}.wav"
+                torchaudio.save(
+                    os.path.join(diarization_path, name), _waveform.view(1, -1).cpu(), sr
+                )
+        else:
             torchaudio.save(
-                os.path.join(new_path, name), _waveform.view(1, -1).cpu(), sr
+                os.path.join(diarization_path, f"Sample_{i}_1.wav"), generated_w1.view(1, -1).cpu(), sr
             )
+            torchaudio.save(
+                os.path.join(diarization_path, f"Sample_{i}_2.wav"), generated_w2.view(1, -1).cpu(), sr
+            )
+    # for filename in os.listdir(dir_path):
+    #     file_path = os.path.join(dir_path, filename)
+    #     waveform, sr = torchaudio.load(file_path)
+    #     print(filename) 
+    #     # 前後 padding 1 sec
+    #     padding_wavform = F.pad(waveform, (padding_length, padding_length), mode='constant', value=0)
+
+    #     E_norm, segments, permutation = generate_embeddings(padding_wavform, sr, model, device) # (T × M)
+    #     segments = segments.to(device)
+    #     # print(E_norm.shape)
+
+    #     # random two matrix Psi & A
+    #     T, M = E_norm.shape
+    #     K = 2 # number of speaker
+
+    #     A = torch.randn(T, K, requires_grad=True, device=device)
+    #     Psi = torch.randn(K, M, requires_grad=True, device=device)
+
+    #     # define opt
+    #     opt_A = Adam([A],)
+    #     opt_Psi = Adam([Psi],)
+
+    #     # print(E_norm)
+    #     # print(E_norm - torch.einsum("TK,KM->TM", A, Psi)) # 矩陣相乘
+    #     i = 0
+    #     while i < 5000:
+    #         # compute loss
+    #         L = compute_loss(E_norm, A, Psi, K, T)
+    #         # calculate gradient of Psi
+    #         opt_Psi.zero_grad()
+    #         L.backward(inputs=Psi)
+    #         opt_Psi.step()
+    #         # Psi.data = nn.functional.normalize(shrink(Psi), dim=1).data
+    #         Psi.data = shrink(Psi.data, 1e-4)
+    #         Psi.data = project_unitdisk(Psi.data)
+
+    #         # recompute loss
+    #         L = compute_loss(E_norm, A, Psi, K, T)
+    #         #calculate gradient of A
+    #         opt_A.zero_grad()
+    #         L.backward(inputs=A)
+    #         opt_A.step()
+    #         A.data = torch.clamp(shrink(A.data, 1e-4), 0, 1).data
+    #         i = i + 1
+
+    #     # print(E_norm - torch.einsum("TK,KM->TM", A, Psi))
+    #     # print(A.argmax(-1))
+    #     # print(A.shape) # [45, 2]
+
+    #     # print(segments.shape)
+    #     new_waveform_list = []
+    #     for k in range(0, K):
+    #         new_waveform = permutation(segments, (A.argmax(-1) == k))
+    #         # print(new_waveform.shape)
+    #         new_waveform = new_waveform.squeeze(1)
+    #         new_waveform = new_waveform[..., padding_length : -padding_length]
+    #         # print(new_waveform.shape)
+    #         chunks = torch.chunk(new_waveform, K, dim=-1)
+    #         S, T = chunks[0].shape
+    #         new_chunks = torch.zeros(S, T).to(device)
+
+    #         for chunk in chunks:
+    #             new_chunks.data += chunk.data
+            
+    #         # print(new_chunks.shape)
+    #         new_waveform_list.append(new_chunks)
+
+    #     new_path = '/home/hualing/Undiff/results_new_sampling/source_separation_inference/diarization'
+        
+    #     if not os.path.exists(new_path):
+    #         os.makedirs(new_path)
+
+    #     for i, _waveform in enumerate(new_waveform_list):
+    #         name = filename[:-4] + f"_{i + 1}.wav"
+    #         torchaudio.save(
+    #             os.path.join(new_path, name), _waveform.view(1, -1).cpu(), sr
+    #         )

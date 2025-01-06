@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Tuple
 
 import torch
 import torchaudio
+from torch.nn import functional as F
 
 from improved_diffusion import bwe_utils, declipping_utils
 from improved_diffusion.datasets.utils import cut_audio_segment, mel_spectrogram
@@ -14,12 +15,14 @@ from improved_diffusion.metrics import Metric
 import gc
 from torch.cuda.amp import autocast
 # from speechbrain.inference.speaker import EncoderClassifier
-from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model, Wav2Vec2ForSequenceClassification
-
+# from espnet2.bin.spk_inference import Speech2Embedding
+# from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model, Wav2Vec2ForSequenceClassification
+# speech2spk_embed = Speech2Embedding.from_pretrained(model_tag="espnet/voxcelebs12_ecapa_wavlm_joint")
 # classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
-model_name = "superb/wav2vec2-base-superb-sid"
-feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
-wav2vec = Wav2Vec2ForSequenceClassification.from_pretrained(model_name).to('cuda')
+# model_name = "superb/wav2vec2-base-superb-sid"
+# feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
+# wav2vec = Wav2Vec2ForSequenceClassification.from_pretrained(model_name).to('cuda')
+
 
 class TaskType(Enum):
     BWE = auto()
@@ -309,38 +312,33 @@ class SourceSeparationTask(BaseInverseTask):
         return TaskType.SOURCE_SEPARATION
 
     def prepare_data(self, audio_files: List[str]):
+        filtered_mic2_audio_files = [[file for file in files if "mic1" in file] for files in audio_files]
+        n_samples = min([len(files) for files in filtered_mic2_audio_files])
+
+        return {f"spk{i}": random.sample(files, k=n_samples)  for i, files in enumerate(filtered_mic2_audio_files)}
+
         # all_folder = [f for f in os.listdir(audio_files)]
-        num_folders_to_select = 2
-        select_folders = random.sample(audio_files, num_folders_to_select)
+        # num_folders_to_select = 2
+        # select_folders = random.sample(audio_files, num_folders_to_select)
 
-        audio_files_1 = []
-        audio_files_2 = []
+        # audio_files_1 = []
+        # audio_files_2 = []
 
-        # folder_path1 = select_folders[0] # speaker 1
-        folder_path1 = "/media/md01/public_datasets/VCTK-Corpus-0.92/wav16_silence_trimmed/p254"
-        for file in os.listdir(folder_path1):
-            if "mic1" in file:
-                audio_files_1.append(os.path.join(folder_path1, file))
+        # # folder_path1 = select_folders[0] # speaker 1
+        # folder_path1 = "/home/public_datasets/VCTK-Corpus-0.92/wav48_silence_trimmed/p254"
+        # for file in os.listdir(folder_path1):
+        #     if "mic1" in file:
+        #         audio_files_1.append(os.path.join(folder_path1, file))
 
-        # folder_path2 = select_folders[1] # speaker 2
-        folder_path2 = "/media/md01/public_datasets/VCTK-Corpus-0.92/wav16_silence_trimmed/p248"
-        for file in os.listdir(folder_path2):
-            if "mic1" in file:
-                audio_files_2.append(os.path.join(folder_path2, file))
+        # # folder_path2 = select_folders[1] # speaker 2
+        # folder_path2 = "/home/public_datasets/VCTK-Corpus-0.92/wav48_silence_trimmed/p248"
+        # for file in os.listdir(folder_path2):
+        #     if "mic1" in file:
+        #         audio_files_2.append(os.path.join(folder_path2, file))
             
-        min_length = min(len(audio_files_1), len(audio_files_2)) # make two list have same number of sample
-        files1 = audio_files_1[:min_length]
-        files2 = audio_files_2[:min_length]
-
-        assert len(files1) == len(files2)
-
-        return {"files": files1, "auxiliary_files": files2}
-        # n_samples = len(audio_files)
-        # n_half_samples = n_samples // 2
-        # n_half_samples = min(n_samples - n_half_samples, n_half_samples)
-
-        # files1 = random.sample(audio_files[:n_half_samples], k=n_half_samples)
-        # files2 = random.sample(audio_files[n_half_samples:], k=n_half_samples)
+        # min_length = min(len(audio_files_1), len(audio_files_2)) # make two list have same number of sample
+        # files1 = audio_files_1[:min_length]
+        # files2 = audio_files_2[:min_length]
 
         # assert len(files1) == len(files2)
 
@@ -358,13 +356,14 @@ class SourceSeparationTask(BaseInverseTask):
         degraded_sample: torch.Tensor,
         original_sample: torch.Tensor,
         idx: int,
+        n_spk: int,
         sr: int = 16000,
     ):
         pred_chunked = torch.chunk(
-            pred_sample, chunks=2, dim=0 # dim=0 -> batch # modify
+            pred_sample, chunks=n_spk, dim=0 # dim=0 -> batch # modify
         )  # explicit number of chunks 2
         orig_chunked = torch.chunk(
-            original_sample, chunks=2, dim=0
+            original_sample, chunks=n_spk, dim=0
         )  # explicit number of chunks 2
         for i, (cur_pred, cur_orig) in enumerate(zip(pred_chunked, orig_chunked)):
             name = f"Sample_{idx}_{i + 1}.wav"
@@ -392,7 +391,7 @@ class SourceSeparationTask(BaseInverseTask):
     #     return x[: x.size(0) // 2, :, :] + x[x.size(0) // 2 :, :, :]
         # return x[:, :, : x.size(-1) // 2] + x[:, :, x.size(-1) // 2 :]
     def degradation(self, x: torch.Tensor) -> torch.Tensor:
-         return torch.stack([s for s in torch.chunk(x, 2, dim=0)]).sum(0)
+         return torch.stack([s for s in torch.chunk(x, 3, dim=0)]).sum(0)
 
     def inference(
         self,
@@ -416,22 +415,21 @@ class SourceSeparationTask(BaseInverseTask):
             print(x.shape)
             degraded_sample = self.degradation(x).cpu()
 
-            reference_1 = random.choice([file for file in files_dict[files_key[0]] if file not in f[0]])
-            reference_2 = random.choice([file for file in files_dict[files_key[1]] if file not in f[1]])
-            reference_f = (reference_1, reference_2)
-            r_x = self.load_audios(reference_f, target_sample_rate, segment_size, device)
-            r_x = self.prepare_audio_before_degradation(r_x)
-            f_e = feature_extractor(r_x.squeeze(1), return_tensors="pt", sampling_rate=16000)
-            print(f_e.input_values.shape)
+            # reference_1 = random.choice([file for file in files_dict[files_key[0]] if file not in f[0]])
+            # reference_2 = random.choice([file for file in files_dict[files_key[1]] if file not in f[1]])
+            # reference_f = (reference_1, reference_2)
+            # r_x = self.load_audios(reference_f, target_sample_rate, segment_size, device)
+            # r_x = self.prepare_audio_before_degradation(r_x)
 
-            with torch.no_grad():
+            # with torch.no_grad():
+                # r_embeddings = speech2spk_embed(r_x.squeeze(1))
                 # r_embeddings = classifier.encode_batch(r_x.squeeze(1))
-                o = wav2vec(f_e.input_values.squeeze(0).to(device))
-                r_embeddings = o.logits
+                # o = wav2vec(f_e.input_values.squeeze(0).to(device))
+                # r_embeddings = o.logits
                 # r_embeddings = r_embeddings.mean(dim=1)
-            print(r_embeddings.shape)
-            torch.cuda.empty_cache()
-            gc.collect()
+            # print(f"r_embedding: {r_embeddings.shape}")
+            # torch.cuda.empty_cache()
+            # gc.collect()
 
             sample = diffusion.p_sample_loop(
                 model,
@@ -442,18 +440,16 @@ class SourceSeparationTask(BaseInverseTask):
                 orig_x=x,
                 progress=True,
                 degradation=self.degradation,
-                task_args= {'reference': r_embeddings, 'ground_truth': x}
+                task_kwargs= None
             ).cpu()
             x = x.cpu()
             real_samples.append(x)
             fake_samples.append(sample)
 
-            # calculate each sample's Si-SNR
-            
+            self.save_audios(sample, degraded_sample, x, i, len(audio_files), sr=target_sample_rate)
 
-            self.save_audios(sample, degraded_sample, x, i, sr=target_sample_rate)
-
-            del sample, x, degraded_sample, reference_1, reference_2, reference_f, r_x, r_embeddings
+            # del sample, x, degraded_sample, reference_1, reference_2, reference_f, r_x, r_embeddings
+            del sample, x, degraded_sample
             torch.cuda.empty_cache()
             gc.collect()
 
@@ -461,22 +457,3 @@ class SourceSeparationTask(BaseInverseTask):
             fake_samples, self.metrics, reference_wavs=real_samples
         )
         log_results(results_dir=self.output_dir, res=scores)
-
-# def _compute(self, samples, real_samples):
-#     # 確保樣本的尺寸相同
-#     assert samples.size(-1) == real_samples.size(-1), "Sample and real samples must have the same length."
-
-#     # 計算 alpha
-#     alpha = (samples * real_samples).sum(-1, keepdims=True) / (
-#         real_samples.square().sum(-1, keepdims=True) + 1e-9
-#     )
-#     real_samples_scaled = alpha * real_samples
-
-#     # 計算目標能量和殘差能量
-#     e_target = real_samples_scaled.square().sum(-1)
-#     e_res = (real_samples_scaled - samples).square().sum(-1)
-
-#     # 計算 Si-SNR
-#     sisnr = 10 * torch.log10(e_target / (e_res + 1e-9)).cpu().numpy()
-
-#     return sisnr
