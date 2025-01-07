@@ -106,8 +106,10 @@ class SiSNR(Metric):
         length = samples.size(-1)
         cut_point = length // 2
 
+
         sample_1 = samples[..., :cut_point]
         sample_2 = samples[..., cut_point:]
+        # sample_list = [torch.cat([sample_1, sample_2], dim=0), torch.cat([sample_2, sample_1], dim=0)]
         sample_list.append(torch.cat((sample_2, sample_1), dim=-1))
 
         for sample in sample_list:

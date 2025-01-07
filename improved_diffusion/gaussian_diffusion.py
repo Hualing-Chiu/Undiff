@@ -1016,7 +1016,11 @@ class CorrectorVPConditional:
         if source_separation:
             coefficient = 0.5
             total_log_sum = 0
+<<<<<<< HEAD
             n_spk = x_prev.size(0) // y.size(0)
+=======
+            total_grad_sum = 0
+>>>>>>> 21de76f9f3be3d480108be1b59da3d5a0ffa79c1
 
             for i in range(steps):
                 new_samples = []
@@ -1027,15 +1031,35 @@ class CorrectorVPConditional:
                 total_log_sum += log_p_y_x
                 start = 0
                 end = y.size(0)
+<<<<<<< HEAD
                 while end <= x_prev.size(0):
                     new_sample = (
                         x["sample"][start:end, :, :] + coefficient * total_log_sum
+=======
+                # weight_total = 1 - ((t.float() / self.sde.num_timesteps) ** 2)
+                weight_grad = (t.float() / self.sde.num_timesteps) ** 2
+                # weight_grad = 1 / (1 + torch.exp(-5 * (self.sde.num_timesteps - t.float() / self.sde.num_timesteps - 0.5)))
+                grad_1 = torch.vmap(lambda x, y: x*y)(grad_1, weight_grad)
+                total_grad_sum += grad_1
+                while end <= x_prev.size(0):
+                    new_sample = (
+                        # x['sample'][start:end, :, :] + torch.vmap(lambda x, y: x*y)(total_log_sum, weight_total[start:end]) - grad_1[start:end, :, :]
+                        x["sample"][start:end, :, :] + coefficient * total_log_sum - total_grad_sum[start:end, :, :]
+                        # x["sample"][start:end, :, :] + coefficient * (total_log_sum - grad_1[start:end, :, :])
+>>>>>>> 21de76f9f3be3d480108be1b59da3d5a0ffa79c1
                     )
                     new_samples.append(new_sample)
                     start = end
                     end += y.size(0)
                 x_prev = torch.cat(new_samples, dim=0)
 
+<<<<<<< HEAD
+=======
+            # log_p_y_x = log_p_y_x.repeat(n_spk, 1, 1)
+            
+            condition = None
+            # condition = log_p_y_x - 2 * grad_1
+>>>>>>> 21de76f9f3be3d480108be1b59da3d5a0ffa79c1
         else:
             for i in range(steps):
                 if self.sde.input_sigma_t:

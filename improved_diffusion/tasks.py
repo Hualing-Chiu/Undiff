@@ -354,6 +354,27 @@ class SourceSeparationTask(BaseInverseTask):
             x = self.prepare_audio_before_degradation(x)
 
             degraded_sample = self.degradation(x).cpu()
+<<<<<<< HEAD
+=======
+
+            reference_1 = random.choice([file for file in files_dict[files_key[0]] if file not in f[0]])
+            reference_2 = random.choice([file for file in files_dict[files_key[1]] if file not in f[1]])
+            reference_f = (reference_1, reference_2)
+            r_x = self.load_audios(reference_f, target_sample_rate, segment_size, device)
+            r_x = self.prepare_audio_before_degradation(r_x)
+            f_e = feature_extractor(x.squeeze(1), return_tensors="pt", sampling_rate=16000)
+            print(f_e.input_values.shape)
+
+            with torch.no_grad():
+                # r_embeddings = classifier.encode_batch(r_x.squeeze(1))
+                o = wav2vec(f_e.input_values.squeeze(0).to(device))
+                r_embeddings = o.logits
+                # r_embeddings = r_embeddings.mean(dim=1)
+            print(r_embeddings.shape)
+            torch.cuda.empty_cache()
+            gc.collect()
+
+>>>>>>> 21de76f9f3be3d480108be1b59da3d5a0ffa79c1
             sample = diffusion.p_sample_loop(
                 model,
                 x.shape,
