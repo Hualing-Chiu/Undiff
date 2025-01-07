@@ -11,15 +11,7 @@ from improved_diffusion import bwe_utils, declipping_utils
 from improved_diffusion.datasets.utils import cut_audio_segment, mel_spectrogram
 from improved_diffusion.inference_utils import calculate_all_metrics, log_results
 from improved_diffusion.metrics import Metric
-import gc
-from torch.cuda.amp import autocast
-# from speechbrain.inference.speaker import EncoderClassifier
-from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model, Wav2Vec2ForSequenceClassification
 
-# classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
-model_name = "superb/wav2vec2-base-superb-sid"
-feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
-wav2vec = Wav2Vec2ForSequenceClassification.from_pretrained(model_name).to('cuda')
 
 class TaskType(Enum):
     BWE = auto()
@@ -113,7 +105,7 @@ class BaseInverseTask(UnconditionalTask):
     def __init__(self, output_dir: str, metrics: List[Metric]):
         super().__init__(output_dir, metrics)
 
-        for path in [self.generated_path, self.original_path, self.degraded_path, self.concatenate_path, self.diarization_path]:
+        for path in [self.generated_path, self.original_path, self.degraded_path]:
             if not self.exists(path):
                 os.makedirs(path)
 
@@ -133,15 +125,6 @@ class BaseInverseTask(UnconditionalTask):
     @property
     def degraded_path(self):
         return os.path.join(self.output_dir, "degraded")
-
-    # my own concatenate function
-    @property
-    def concatenate_path(self):
-        return os.path.join(self.output_dir, "concatenate")
-    
-    @property
-    def diarization_path(self):
-        return os.path.join(self.output_dir, "diarization")
 
     @staticmethod
     def exists(path: str):
@@ -224,7 +207,6 @@ class BaseInverseTask(UnconditionalTask):
                 orig_x=x,
                 progress=True,
                 degradation=self.degradation,
-                task_args=None
             ).cpu()
 
             x = x.cpu()
@@ -308,49 +290,16 @@ class SourceSeparationTask(BaseInverseTask):
     def task_type(self) -> TaskType:
         return TaskType.SOURCE_SEPARATION
 
-    def prepare_data(self, audio_files: List[str]):
-        # all_folder = [f for f in os.listdir(audio_files)]
-        num_folders_to_select = 2
-        select_folders = random.sample(audio_files, num_folders_to_select)
+    def prepare_data(self, audio_files: List[List[str]]):
+        n_samples = min([len(files) for files in audio_files])
 
-        audio_files_1 = []
-        audio_files_2 = []
-
-        # folder_path1 = select_folders[0] # speaker 1
-        folder_path1 = "/media/md01/public_datasets/VCTK-Corpus-0.92/wav16_silence_trimmed/p254"
-        for file in os.listdir(folder_path1):
-            if "mic1" in file:
-                audio_files_1.append(os.path.join(folder_path1, file))
-
-        # folder_path2 = select_folders[1] # speaker 2
-        folder_path2 = "/media/md01/public_datasets/VCTK-Corpus-0.92/wav16_silence_trimmed/p248"
-        for file in os.listdir(folder_path2):
-            if "mic1" in file:
-                audio_files_2.append(os.path.join(folder_path2, file))
-            
-        min_length = min(len(audio_files_1), len(audio_files_2)) # make two list have same number of sample
-        files1 = audio_files_1[:min_length]
-        files2 = audio_files_2[:min_length]
-
-        assert len(files1) == len(files2)
-
-        return {"files": files1, "auxiliary_files": files2}
-        # n_samples = len(audio_files)
-        # n_half_samples = n_samples // 2
-        # n_half_samples = min(n_samples - n_half_samples, n_half_samples)
-
-        # files1 = random.sample(audio_files[:n_half_samples], k=n_half_samples)
-        # files2 = random.sample(audio_files[n_half_samples:], k=n_half_samples)
-
-        # assert len(files1) == len(files2)
-
-        # return {"files": files1, "auxiliary_files": files2}
+        return {f"spk{i}": random.sample(files, k=n_samples)
+                for i, files in enumerate(audio_files)}
 
     def prepare_audio_before_degradation(self, x: List[torch.Tensor]) -> torch.Tensor:
         min_sample_length = min(map(lambda tensor: tensor.size(-1), x))
         truncated_x = list(map(lambda tensor: tensor[..., :min_sample_length], x))
-        return torch.cat(truncated_x, dim=0) # dim=-1 to dim=0
-        # return torch.cat(truncated_x, dim=-1)
+        return torch.cat(truncated_x, dim=0)
 
     def save_audios(
         self,
@@ -358,13 +307,14 @@ class SourceSeparationTask(BaseInverseTask):
         degraded_sample: torch.Tensor,
         original_sample: torch.Tensor,
         idx: int,
+        n_spk: int,
         sr: int = 16000,
     ):
         pred_chunked = torch.chunk(
-            pred_sample, chunks=2, dim=0 # dim=0 -> batch # modify
+            pred_sample, chunks=n_spk, dim=0
         )  # explicit number of chunks 2
         orig_chunked = torch.chunk(
-            original_sample, chunks=2, dim=0
+            original_sample, chunks=n_spk, dim=0
         )  # explicit number of chunks 2
         for i, (cur_pred, cur_orig) in enumerate(zip(pred_chunked, orig_chunked)):
             name = f"Sample_{idx}_{i + 1}.wav"
@@ -374,13 +324,6 @@ class SourceSeparationTask(BaseInverseTask):
             torchaudio.save(
                 os.path.join(self.original_path, name), cur_orig.view(1, -1), sr
             )
-        
-        # concate the separate audio
-        concatenated_pred = torch.cat(pred_chunked, dim=-1)
-        name = f"Sample_{idx}.wav"
-        torchaudio.save(
-            os.path.join(self.concatenate_path, name), concatenated_pred.view(1, -1), sr
-        )
 
         # redefine name for degraded
         name = f"Sample_{idx}.wav"
@@ -388,11 +331,8 @@ class SourceSeparationTask(BaseInverseTask):
             os.path.join(self.degraded_path, name), degraded_sample.view(1, -1), sr
         )
 
-    # def degradation(self, x: torch.Tensor) -> torch.Tensor:
-    #     return x[: x.size(0) // 2, :, :] + x[x.size(0) // 2 :, :, :]
-        # return x[:, :, : x.size(-1) // 2] + x[:, :, x.size(-1) // 2 :]
     def degradation(self, x: torch.Tensor) -> torch.Tensor:
-         return torch.stack([s for s in torch.chunk(x, 2, dim=0)]).sum(0)
+        return torch.stack([s for s in torch.chunk(x, 3, dim=0)]).sum(0)
 
     def inference(
         self,
@@ -408,31 +348,12 @@ class SourceSeparationTask(BaseInverseTask):
 
         fake_samples = []
         real_samples = []
-        files_key = list(files_dict.keys())
 
-        for i, f in enumerate(zip(*files_dict.values())): # f 是路徑tuple
+        for i, f in enumerate(zip(*files_dict.values())):
             x = self.load_audios(f, target_sample_rate, segment_size, device)
             x = self.prepare_audio_before_degradation(x)
-            print(x.shape)
+
             degraded_sample = self.degradation(x).cpu()
-
-            reference_1 = random.choice([file for file in files_dict[files_key[0]] if file not in f[0]])
-            reference_2 = random.choice([file for file in files_dict[files_key[1]] if file not in f[1]])
-            reference_f = (reference_1, reference_2)
-            r_x = self.load_audios(reference_f, target_sample_rate, segment_size, device)
-            r_x = self.prepare_audio_before_degradation(r_x)
-            f_e = feature_extractor(r_x.squeeze(1), return_tensors="pt", sampling_rate=16000)
-            print(f_e.input_values.shape)
-
-            with torch.no_grad():
-                # r_embeddings = classifier.encode_batch(r_x.squeeze(1))
-                o = wav2vec(f_e.input_values.squeeze(0).to(device))
-                r_embeddings = o.logits
-                # r_embeddings = r_embeddings.mean(dim=1)
-            print(r_embeddings.shape)
-            torch.cuda.empty_cache()
-            gc.collect()
-
             sample = diffusion.p_sample_loop(
                 model,
                 x.shape,
@@ -442,41 +363,18 @@ class SourceSeparationTask(BaseInverseTask):
                 orig_x=x,
                 progress=True,
                 degradation=self.degradation,
-                task_args= {'reference': r_embeddings, 'ground_truth': x}
             ).cpu()
+
             x = x.cpu()
             real_samples.append(x)
             fake_samples.append(sample)
 
-            # calculate each sample's Si-SNR
-            
+            self.save_audios(sample, degraded_sample, x, i, len(audio_files), sr=target_sample_rate)
 
-            self.save_audios(sample, degraded_sample, x, i, sr=target_sample_rate)
-
-            del sample, x, degraded_sample, reference_1, reference_2, reference_f, r_x, r_embeddings
+            del sample, x, degraded_sample
             torch.cuda.empty_cache()
-            gc.collect()
 
         scores = calculate_all_metrics(
             fake_samples, self.metrics, reference_wavs=real_samples
         )
         log_results(results_dir=self.output_dir, res=scores)
-
-# def _compute(self, samples, real_samples):
-#     # 確保樣本的尺寸相同
-#     assert samples.size(-1) == real_samples.size(-1), "Sample and real samples must have the same length."
-
-#     # 計算 alpha
-#     alpha = (samples * real_samples).sum(-1, keepdims=True) / (
-#         real_samples.square().sum(-1, keepdims=True) + 1e-9
-#     )
-#     real_samples_scaled = alpha * real_samples
-
-#     # 計算目標能量和殘差能量
-#     e_target = real_samples_scaled.square().sum(-1)
-#     e_res = (real_samples_scaled - samples).square().sum(-1)
-
-#     # 計算 Si-SNR
-#     sisnr = 10 * torch.log10(e_target / (e_res + 1e-9)).cpu().numpy()
-
-#     return sisnr

@@ -52,11 +52,20 @@ def inference(cfg):
 
     model, diffusion = instantiate_model_and_diffusion(cfg, DEVICE)
 
-    files_or_num = (
-        list(map(lambda x: os.path.join(cfg.audio_dir, x), os.listdir(cfg.audio_dir)))
-        if task.task_type != TaskType.UNCONDITIONAL
-        else cfg.audio_dir
-    )
+    # files_or_num = (
+    #     list(map(lambda x: os.path.join(cfg.audio_dir, x), os.listdir(cfg.audio_dir)))
+    #     if task.task_type != TaskType.UNCONDITIONAL
+    #     else cfg.audio_dir
+    # )
+
+    if task.task_type == TaskType.SOURCE_SEPARATION:
+        files_or_num = [list(map(lambda x: os.path.join(d, x), os.listdir(d))) for d in cfg.audio_dir]
+    else:    
+        files_or_num = (
+            list(map(lambda x: os.path.join(cfg.audio_dir, x), os.listdir(cfg.audio_dir)))
+            if task.task_type != TaskType.UNCONDITIONAL
+            else cfg.audio_dir
+        )
 
     task.inference(
         files_or_num, model, diffusion, cfg.sampling_rate, cfg.segment_size, DEVICE

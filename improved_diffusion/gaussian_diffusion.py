@@ -10,19 +10,11 @@ import math
 import numpy as np
 import torch
 import torch as th
-import torchaudio
-import torch.nn.functional as F
-# from speechbrain.inference.speaker import EncoderClassifier
-from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model, Wav2Vec2ForSequenceClassification
 
 from .losses import discretized_gaussian_log_likelihood, normal_kl
 from .nn import mean_flat
 from .tasks import TaskType
 
-# classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
-model_name = "superb/wav2vec2-base-superb-sid"
-feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
-wav2vec = Wav2Vec2ForSequenceClassification.from_pretrained(model_name).to('cuda')
 
 def get_named_beta_schedule(schedule_name, num_diffusion_timesteps):
     """
@@ -446,7 +438,6 @@ class GaussianDiffusion:
         orig_x=None,
         degradation=None,
         use_rg_bwe: bool = False,
-        task_args=None
     ):
         """
         Generate samples from the model.
@@ -489,7 +480,6 @@ class GaussianDiffusion:
             orig_x=orig_x,
             degradation=degradation,
             use_rg_bwe=use_rg_bwe,
-            task_args=task_args
         ):
             final = sample
 
@@ -514,7 +504,6 @@ class GaussianDiffusion:
         measurement=None,
         measurement_cond_fn=None,
         use_rg_bwe: bool = False,
-        task_args=None
     ):
         """
         Generate samples from the model and yield intermediate samples from
@@ -548,7 +537,10 @@ class GaussianDiffusion:
             xi = 0.01
         elif sample_method == TaskType.SOURCE_SEPARATION:
             snr = 0.00001
-            xi = 0.01
+            xi = None
+        else:
+            snr = None
+            xi = None
 
         # define corrector (as in predictor-corrector sampling)
         if sample_method == TaskType.UNCONDITIONAL:
@@ -572,11 +564,12 @@ class GaussianDiffusion:
             t = th.tensor([i] * shape[0], device=device)
 
             if sample_method in rg_exps:
+                assert corrector and degradation
                 img.requires_grad_(True)
                 if i != 199:
                     y = degradation(orig_x)
                     img = corrector.update_fn_adaptive(
-                        None, img, t, y, threshold=200, steps=1, source_separation=False, task_args=None
+                        None, img, t, y, threshold=200, steps=1, source_separation=False
                     )
 
             with th.no_grad():
@@ -592,10 +585,10 @@ class GaussianDiffusion:
                 )
 
             if sample_method == TaskType.SOURCE_SEPARATION:
+                assert corrector and degradation
                 y = degradation(orig_x)
-                # r_x = task_args['reference']
                 img = corrector.update_fn_adaptive(
-                    out, img, t, y, threshold=150, steps=2, source_separation=True, task_args=task_args
+                    out, img, t, y, threshold=150, steps=1, source_separation=True
                 )
                 out["sample"] = img
 
@@ -981,6 +974,7 @@ def _extract_into_tensor(arr, timesteps, broadcast_shape):
         res = res[..., None]
     return res.expand(broadcast_shape)
 
+
 class CorrectorVPConditional:
     def __init__(self, degradation, xi, sde, snr, score_fn, device):
         self.degradation = degradation
@@ -994,9 +988,9 @@ class CorrectorVPConditional:
         )
 
     def update_fn_adaptive(
-        self, x, x_prev, t, y, threshold=150, steps=1, source_separation=False, task_args=None
+        self, x, x_prev, t, y, threshold=150, steps=1, source_separation=False
     ):
-        x, condition = self.update_fn(x, x_prev, t, y, steps, source_separation, task_args=task_args)
+        x, condition = self.update_fn(x, x_prev, t, y, steps, source_separation)
 
         if t[0] < threshold and t[0] > 0:
             if self.sde.input_sigma_t:
@@ -1007,10 +1001,9 @@ class CorrectorVPConditional:
                 eps = self.score_fn(x, self.sde._scale_timesteps(t))
 
             if condition is None:
-                # condition = y - (x[:, :, : y.size(-1)] + x[:, :, y.size(-1) :])
-                # condition = y -(x[: y.size(0) , :, :] + x[y.size(0) :, :, :]) # modify
                 n_spk = x.size(0) // y.size(0)
-                condition = y - torch.stack(torch.chunk(x, n_spk, 0)).sum(0)
+                condition = torch.vmap(lambda x,y:x*y)(y, torch.tensor(self.sde.sqrt_alphas_cumprod, device=t.device)[t[:y.size(0)]]) - torch.stack(torch.chunk(x, n_spk, 0)).sum(0)
+                # condition = torch.vmap(lambda x,y:x/y)(condition, 2-2*torch.tensor(self.sde.alphas_cumprod, device=t.device)[t[:y.size(0)]])
             if source_separation:
                 x = self.langevin_corrector_sliced(x, t, eps, y, condition)
             else:
@@ -1018,101 +1011,31 @@ class CorrectorVPConditional:
 
         return x
 
-    def update_fn(self, x, x_prev, t, y, steps, source_separation, task_args=None):
+    def update_fn(self, x, x_prev, t, y, steps, source_separation):
+        condition = None
         if source_separation:
             coefficient = 0.5
             total_log_sum = 0
+            n_spk = x_prev.size(0) // y.size(0)
 
-            # r_embeddings = classifier.encode_batch(r_x.squeeze(1))
-            r_embeddings = task_args['reference']
-            ground_truth_x = task_args['ground_truth']
-
-            for i in range(steps): # 把抽 embedding 寫在這
-                # x_prev.requires_grad_(True)
+            for i in range(steps):
                 new_samples = []
-                # log_p_y_x = y - (
-                #     x_prev[:, :, : y.size(-1)] + x_prev[:, :, y.size(-1) :]
-                # )
-                n_spk = x_prev.size(0) // y.size(0)
-                log_p_y_x = y - (
+                log_p_y_x = torch.vmap(lambda x,y:x*y)(y, torch.tensor(self.sde.sqrt_alphas_cumprod, device=t.device)[t[:y.size(0)]]) - (
                     torch.stack(torch.chunk(x_prev, n_spk, 0)).sum(0)
                 )
+                # log_p_y_x = torch.vmap(lambda x,y:x/y)(log_p_y_x, 2-2*torch.tensor(self.sde.alphas_cumprod, device=t.device)[t[:y.size(0)]])
                 total_log_sum += log_p_y_x
-
-                # add f(x)
-                if self.sde.input_sigma_t:
-                    eps = self.score_fn(
-                        x_prev, _extract_into_tensor(self.sde.beta_variance, t, t.shape)
-                    )
-                else:
-                    eps = self.score_fn(x_prev, self.sde._scale_timesteps(t))
-
-                x_prev.requires_grad_(True)
-                # x_0 = self.sde._predict_xstart_from_eps(x_prev, t, eps.detach())
-                # embeddings = classifier.encode_batch(x_0.squeeze(1))       
-                # embeddings = classifier.encode_batch(x_prev.squeeze(1))
-                f_e = (x_prev - x_prev.mean(-1, keepdim=True)) / x_prev.std(-1, keepdim=True)
-                # f_e= feature_extractor(x_0.squeeze(1), return_tensors="pt", sampling_rate=16000)
-                o = wav2vec(f_e.squeeze(1))
-                embeddings = o.logits # last_hidden_state to logits
-
-                # n_spk = embeddings.size(0) // y.size(0)
-
-                similarity_1 = 0
-                similarity_2 = 0
-                for i in range(n_spk):
-                    embedding = embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
-                    r_embedding = r_embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
-                    g_x = ground_truth_x[i * y.size(0):(i + 1) * y.size(0), ...]
-                    wav_x = x_prev[i * y.size(0):(i + 1) * y.size(0), ...]
-                    loss = F.mse_loss(embedding, r_embedding, reduction='mean')
-                    # loss = F.mse_loss(embedding, r_embedding, reduction='mean')
-
-                    # ground truth wav & wav
-                    # loss_g_x = F.cosine_similarity(wav_x, g_x, dim=-1)
-                    similarity_1 = similarity_1 + loss
-                    # similarity_2 = similarity_2 + loss_g_x
-
-                # gradient
-                print(f"similarity_1: {similarity_1}")
-                # print(f"similarity_2: {similarity_2}")
-                similarity_1 = similarity_1.mean()
-                # similarity_2 = similarity_2.mean()
-                grad_1 = torch.autograd.grad(outputs=similarity_1, inputs=x_prev)[0]
-                # grad_2 = torch.autograd.grad(outputs=similarity_2, inputs=x_prev)[0]
-                
-                norm_grad_1 = torch.vmap(torch.linalg.norm)(grad_1) / (x_prev.size(-1) ** 0.5)
-                # norm_grad_2 = torch.vmap(torch.linalg.norm)(grad_2) / (x_prev.size(-1) ** 0.5)
-                # sigma = torch.sqrt(self.alphas[t])
-                s_1 = self.xi / (norm_grad_1 * torch.tensor(self.sde.sqrt_alphas_cumprod).to(t.device)[t] + 1e-6)
-                # s_2 = self.xi / (norm_grad_2 * torch.tensor(self.sde.sqrt_alphas_cumprod).to(t.device)[t] + 1e-6)
-
-                grad_1 = torch.vmap(lambda x, y: x*y)(grad_1, s_1)                
-                # grad_2 = torch.vmap(lambda x, y: x*y)(grad_2, s_2)
-                # alpha = self.sde.q_sample(x_0, t, torch.zeros_like(x_0))
-                
-
-                # update new_samples
                 start = 0
                 end = y.size(0)
-                weight = 2 * ((t.float() / self.sde.num_timesteps) ** 0.5)
-                grad_1 = torch.vmap(lambda x, y: x*y)(grad_1, weight)
-                # print(f"weight: {weight.shape}")
-                # print(f"grad_1 shape: {grad_1.shape}")
                 while end <= x_prev.size(0):
                     new_sample = (
-                        x["sample"][start:end, :, :] + coefficient * total_log_sum - grad_1[start:end, :, :]
-                        # x["sample"][start:end, :, :] + coefficient * total_log_sum
+                        x["sample"][start:end, :, :] + coefficient * total_log_sum
                     )
                     new_samples.append(new_sample)
                     start = end
                     end += y.size(0)
-                x_prev = torch.cat(new_samples, dim=0).detach()
+                x_prev = torch.cat(new_samples, dim=0)
 
-            log_p_y_x = log_p_y_x.repeat(n_spk, 1, 1)
-            
-            condition = None
-            # condition = log_p_y_x - 2 * grad_1
         else:
             for i in range(steps):
                 if self.sde.input_sigma_t:
@@ -1142,36 +1065,30 @@ class CorrectorVPConditional:
                 x_prev = x_prev - s * condition
         return x_prev.float(), condition
 
-    def langevin_corrector_sliced(self, x, t, eps, y, condition=None): # need modity
+    def langevin_corrector_sliced(self, x, t, eps, y, condition=None):
         alpha = self.alphas[t]
         corrected_samples = []
 
         start = 0
-        end = y.size(-1)
-        while end <= x.size(-1):
-            # score = self.recip_alphas[t] * eps[:, :, start:end]
-            score = torch.einsum("b,b...->b...", self.recip_alphas[t], eps[:, :, start:end])
-            noise = torch.randn_like(x[:, :, start:end], device=x.device)
-            grad_norm = torch.norm(score.reshape(score.shape[0], -1), dim=-1).mean() # need fixed
-            noise_norm = torch.norm(noise.reshape(noise.shape[0], -1), dim=-1).mean()
-            step_size = (self.snr * noise_norm / grad_norm) ** 2 * 2 * alpha
+        end = y.size(0)
+        while end <= x.size(0):
+            score = torch.vmap(lambda x,y:x*y)(self.recip_alphas[t[start:end]], eps[start:end, :, :])
+            noise = torch.randn_like(x[start:end, :, :], device=x.device)
+            grad_norm = torch.norm(score.reshape(score.shape[0], -1), dim=-1).mean() # need fix
+            noise_norm = torch.norm(noise.reshape(noise.shape[0], -1), dim=-1).mean() # need fix
+            step_size = (self.snr * noise_norm / grad_norm) ** 2 * 2 * alpha[start:end]
 
             score_to_use = score + condition if condition is not None else score
             x_new = (
-                x[:, :, start:end]
-                + torch.einsum("b,b...->b...", step_size, score_to_use)
-                + torch.einsum("b,b...->b...", torch.sqrt(2 * step_size), noise)
+                x[start:end, :, :]
+                + torch.vmap(lambda x,y:x*y)(step_size, score_to_use)
+                + torch.vmap(lambda x,y:x*y)(torch.sqrt(2 * step_size), noise)
             )
-            # x_new = (
-            #     x[:, :, start:end]
-            #     + step_size * score_to_use
-            #     + torch.sqrt(2 * step_size) * noise
-            # )
             corrected_samples.append(x_new)
             start = end
-            end += y.size(-1)
+            end += y.size(0)
 
-        return torch.cat(corrected_samples, dim=0).float() # dim=-1 to dim=0
+        return torch.cat(corrected_samples, dim=0).float()
 
     def langevin_corrector(self, x, t, eps, y, condition=None):
         alpha = self.alphas[t]
