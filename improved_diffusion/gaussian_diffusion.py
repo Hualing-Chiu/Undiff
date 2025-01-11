@@ -352,6 +352,7 @@ class GaussianDiffusion:
                     pred_xstart + degradation(orig_x) -
                     degradation(pred_xstart)
                 )
+                print("bwe in")
             model_mean, _, _ = self.q_posterior_mean_variance(
                 x_start=pred_xstart, x_t=x, t=t
             )
@@ -467,7 +468,7 @@ class GaussianDiffusion:
         sample_method=None,
         orig_x=None,
         degradation=None,
-        use_rg_bwe: bool = False,
+        use_rg_bwe: bool = True,
         task_kwargs=None,
     ):
         """
@@ -535,7 +536,7 @@ class GaussianDiffusion:
         degradation=None,
         measurement=None,
         measurement_cond_fn=None,
-        use_rg_bwe: bool = False,
+        use_rg_bwe: bool = True,
         task_kwargs=None,
     ):
         """
@@ -1148,35 +1149,37 @@ class CorrectorVPConditional:
             if t[0] != 0:
                 x_prev = self.sde.q_sample(x_prev, t-1)
         else:
-            for i in range(steps):
-                if self.sde.input_sigma_t:
-                    eps = self.score_fn(
-                        x_prev, _extract_into_tensor(
-                            self.sde.beta_variance, t, t.shape)
-                    )
-                else:
-                    eps = self.score_fn(x_prev, self.sde._scale_timesteps(t))
+            if self.sde.input_sigma_t:
+                eps = self.score_fn(
+                    x["sample"], _extract_into_tensor(
+                        self.sde.beta_variance, t, t.shape)
+                )
+            else:
+                eps = self.score_fn(x["sample"], self.sde._scale_timesteps(t))
 
-                x_0 = self.sde._predict_xstart_from_eps(x_prev, t, eps)
-                A_x0 = self.degradation(x_0)
+            x_0 = self.sde._predict_xstart_from_eps(x["sample"], t, eps) # x_0 = x_\theta(x_t)
+            x_prev = x_0
+            A_x0 = self.degradation(x_prev)
 
-                if len(y.shape) < 3 and len(A_x0.shape) < 3:
-                    while len(y.shape) != 3:
-                        y = y.unsqueeze(0)
-                        A_x0 = A_x0.unsqueeze(0) - 1e-3
+            if len(y.shape) < 3 and len(A_x0.shape) < 3:
+                while len(y.shape) != 3:
+                    y = y.unsqueeze(0)
+                    A_x0 = A_x0.unsqueeze(0) - 1e-3
 
-                rec_norm = torch.linalg.norm(
-                    (y - A_x0).view(y.size(0), -1), dim=-1, ord=2
-                ).mean()
-                condition = torch.autograd.grad(
-                    outputs=rec_norm, inputs=x_prev)[0]
+            rec_norm = torch.linalg.norm(
+                (y - A_x0).view(y.size(0), -1), dim=-1, ord=2
+            ).mean()
+            condition = torch.autograd.grad(
+                outputs=rec_norm, inputs=x_prev)[0]
 
-                normguide = torch.linalg.norm(
-                    condition) / (x_0.size(-1) ** 0.5)
-                sigma = torch.sqrt(self.alphas[t])
-                s = self.xi / (normguide * sigma + 1e-6)
+            normguide = torch.linalg.norm(
+                condition) / (x_0.size(-1) ** 0.5)
+            sigma = torch.sqrt(self.alphas[t])
+            s = self.xi / (normguide * sigma + 1e-6)
 
-                x_prev = x_prev - s * condition
+            x_prev = x_prev - s * condition
+            if t[0] != 0:
+                x_prev = self.sde.q_sample(x_prev, t-1) # forward
         return x_prev.float(), condition
 
     def langevin_corrector_sliced(self, x, t, eps, y, condition=None):

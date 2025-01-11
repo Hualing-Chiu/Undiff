@@ -56,7 +56,10 @@ def inference(cfg):
         files_or_num = [list(map(lambda x: os.path.join(d, x), os.listdir(d))) for d in cfg.audio_dir]
     else:    
         files_or_num = (
-            list(map(lambda x: os.path.join(cfg.audio_dir, x), os.listdir(cfg.audio_dir)))
+            list(
+                map(lambda x: os.path.join(cfg.audio_dir, x),
+                filter(lambda f: "mic2" not in f, os.listdir(cfg.audio_dir)))
+            )
             if task.task_type != TaskType.UNCONDITIONAL
             else cfg.audio_dir
         )
