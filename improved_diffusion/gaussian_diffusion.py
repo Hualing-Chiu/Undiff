@@ -437,7 +437,7 @@ class GaussianDiffusion:
         sample_method=None,
         orig_x=None,
         degradation=None,
-        use_rg_bwe: bool = False,
+        use_rg_bwe: bool = True,
     ):
         """
         Generate samples from the model.
@@ -503,7 +503,7 @@ class GaussianDiffusion:
         degradation=None,
         measurement=None,
         measurement_cond_fn=None,
-        use_rg_bwe: bool = False,
+        use_rg_bwe: bool = True,
     ):
         """
         Generate samples from the model and yield intermediate samples from
