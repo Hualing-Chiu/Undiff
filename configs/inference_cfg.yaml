@@ -4,8 +4,8 @@ defaults:
   - diffusion: gaussian_diffusion
   - _self_
 
-output_dir: results_three_spk/source_separation_inference
-audio_dir: /home/public_datasets/VCTK-Corpus-0.92/wav48_silence_trimmed
+output_dir: results_Libri2Mix/source_separation_inference
+audio_dir: /home/public_datasets/LibriMix-wav16/ # /home/public_datasets/VCTK-Corpus-0.92/wav48_silence_trimmed
 use_ema: false
 segment_size: null
 sampling_rate: 16000
