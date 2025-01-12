@@ -1099,11 +1099,11 @@ class CorrectorVPConditional:
             with torch.no_grad():
                 if self.sde.input_sigma_t:
                     eps = self.score_fn(
-                        x["sample"], _extract_into_tensor(self.sde.beta_variance, t, t.shape)
+                        x_prev, _extract_into_tensor(self.sde.beta_variance, t, t.shape)
                     )
                 else:
-                    eps = self.score_fn(x["sample"], self.sde._scale_timesteps(t))
-            x_0 = self.sde._predict_xstart_from_eps(x["sample"], t, eps)
+                    eps = self.score_fn(x_prev, self.sde._scale_timesteps(t))
+            x_0 = self.sde._predict_xstart_from_eps(x_prev, t, eps)
             x_prev = x_0
             # eps = self.sde._predict_eps_from_xstart(x, t, x["pred_xstart"])
             n_spk = x_prev.size(0) // y.size(0)
@@ -1152,10 +1152,10 @@ class CorrectorVPConditional:
             with torch.no_grad():
                 if self.sde.input_sigma_t:
                     eps = self.score_fn(
-                        x["sample"], _extract_into_tensor(self.sde.beta_variance, t, t.shape)
+                        x_prev, _extract_into_tensor(self.sde.beta_variance, t, t.shape)
                     )
                 else:
-                    eps = self.score_fn(x["sample"], self.sde._scale_timesteps(t))
+                    eps = self.score_fn(x_prev, self.sde._scale_timesteps(t))
 
             x_0 = self.sde._predict_xstart_from_eps(x["sample"], t, eps) # x_0 = x_\theta(x_t)
             x_prev = x_0
