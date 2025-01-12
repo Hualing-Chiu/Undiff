@@ -1,10 +1,10 @@
 defaults:
-  - task: bwe
+  - task: declipping
   - model: diffwave
   - diffusion: gaussian_diffusion
   - _self_
 
-output_dir: results/bwe_inference
+output_dir: results/declipping_inference
 audio_dir: /home/public_datasets/VCTK-Corpus-0.92/wav48_silence_trimmed/p254
 use_ema: false
 segment_size: null
