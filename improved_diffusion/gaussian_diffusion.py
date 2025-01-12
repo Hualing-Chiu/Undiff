@@ -326,6 +326,7 @@ class GaussianDiffusion:
                 pred_xstart = (
                     pred_xstart + degradation(orig_x) - degradation(pred_xstart)
                 )
+                # print("bwe in")
             model_mean, _, _ = self.q_posterior_mean_variance(
                 x_start=pred_xstart, x_t=x, t=t
             )
@@ -437,7 +438,7 @@ class GaussianDiffusion:
         sample_method=None,
         orig_x=None,
         degradation=None,
-        use_rg_bwe: bool = True,
+        use_rg_bwe: bool = False,
     ):
         """
         Generate samples from the model.
@@ -503,7 +504,7 @@ class GaussianDiffusion:
         degradation=None,
         measurement=None,
         measurement_cond_fn=None,
-        use_rg_bwe: bool = True,
+        use_rg_bwe: bool = False,
     ):
         """
         Generate samples from the model and yield intermediate samples from
@@ -580,7 +581,7 @@ class GaussianDiffusion:
                     clip_denoised=clip_denoised,
                     denoised_fn=denoised_fn,
                     model_kwargs=model_kwargs,
-                    degradation=degradation if sample_method == "BWE" else None,
+                    degradation=degradation if sample_method == TaskType.BWE else None,
                     orig_x=orig_x,
                 )
 
