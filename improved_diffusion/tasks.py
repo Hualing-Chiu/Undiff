@@ -227,7 +227,7 @@ class BaseInverseTask(UnconditionalTask):
                 orig_x=x,
                 progress=True,
                 degradation=self.degradation,
-                task_args=None
+                task_kwargs=None
             ).cpu()
 
             x = x.cpu()
@@ -251,7 +251,7 @@ class BWETask(BaseInverseTask):
         return TaskType.BWE
 
     def degradation(self, x: torch.Tensor) -> torch.Tensor:
-        lp_filter = bwe_utils.get_FIR_lowpass(order=200, fc=2000, beta=1, sr=16000)
+        lp_filter = bwe_utils.get_FIR_lowpass(order=200, fc=4000, beta=1, sr=16000)
         return bwe_utils.apply_low_pass_firwin(x, lp_filter)
 
 
