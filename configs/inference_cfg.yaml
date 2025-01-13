@@ -7,6 +7,6 @@ defaults:
 output_dir: results_new_sampling/bwe_inference
 audio_dir: /home/public_datasets/VCTK-Corpus-0.92/wav48_silence_trimmed/p254 # /home/public_datasets/VCTK-Corpus-0.92/wav48_silence_trimmed
 use_ema: false
-segment_size: null
+segment_size: 72000
 sampling_rate: 16000
 device: cuda

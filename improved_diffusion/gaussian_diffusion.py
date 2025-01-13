@@ -1166,6 +1166,8 @@ class CorrectorVPConditional:
                     y = y.unsqueeze(0)
                     A_x0 = A_x0.unsqueeze(0) - 1e-3
 
+            # print(f"A_x0: {A_x0.shape}")
+            # print(f"y: {y.shape}")
             rec_norm = torch.linalg.norm(
                 (y - A_x0).view(y.size(0), -1), dim=-1, ord=2
             ).mean()
