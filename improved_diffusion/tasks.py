@@ -315,34 +315,7 @@ class SourceSeparationTask(BaseInverseTask):
         # filtered_mic2_audio_files = [[file for file in files if "mic1" in file] for files in audio_files]
         n_samples = min([len(files) for files in audio_files])
 
-        return {f"spk{i}": random.sample(files, k=n_samples)  for i, files in enumerate(audio_files)}
-
-        # all_folder = [f for f in os.listdir(audio_files)]
-        # num_folders_to_select = 2
-        # select_folders = random.sample(audio_files, num_folders_to_select)
-
-        # audio_files_1 = []
-        # audio_files_2 = []
-
-        # # folder_path1 = select_folders[0] # speaker 1
-        # folder_path1 = "/home/public_datasets/VCTK-Corpus-0.92/wav48_silence_trimmed/p254"
-        # for file in os.listdir(folder_path1):
-        #     if "mic1" in file:
-        #         audio_files_1.append(os.path.join(folder_path1, file))
-
-        # # folder_path2 = select_folders[1] # speaker 2
-        # folder_path2 = "/home/public_datasets/VCTK-Corpus-0.92/wav48_silence_trimmed/p248"
-        # for file in os.listdir(folder_path2):
-        #     if "mic1" in file:
-        #         audio_files_2.append(os.path.join(folder_path2, file))
-            
-        # min_length = min(len(audio_files_1), len(audio_files_2)) # make two list have same number of sample
-        # files1 = audio_files_1[:min_length]
-        # files2 = audio_files_2[:min_length]
-
-        # assert len(files1) == len(files2)
-
-        # return {"files": files1, "auxiliary_files": files2}
+        return {f"spk{i}": random.sample(files, k=n_samples)  for i, files in enumerate(audio_files)}}
 
     def prepare_audio_before_degradation(self, x: List[torch.Tensor]) -> torch.Tensor:
         min_sample_length = min(map(lambda tensor: tensor.size(-1), x))

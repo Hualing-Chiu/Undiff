@@ -468,7 +468,7 @@ class GaussianDiffusion:
         sample_method=None,
         orig_x=None,
         degradation=None,
-        use_rg_bwe: bool = False,
+        use_rg_bwe: bool = True,
         task_kwargs=None,
     ):
         """
@@ -536,7 +536,7 @@ class GaussianDiffusion:
         degradation=None,
         measurement=None,
         measurement_cond_fn=None,
-        use_rg_bwe: bool = False,
+        use_rg_bwe: bool = True,
         task_kwargs=None,
     ):
         """
@@ -616,7 +616,7 @@ class GaussianDiffusion:
                     clip_denoised=clip_denoised,
                     denoised_fn=denoised_fn,
                     model_kwargs=model_kwargs,
-                    degradation=degradation if sample_method == TaskType.BWE else None,
+                    degradation=degradation if sample_method == "BWE" else None, # TaskType.BWE
                     orig_x=orig_x,
                 )
 
@@ -1157,7 +1157,7 @@ class CorrectorVPConditional:
                 else:
                     eps = self.score_fn(x_prev, self.sde._scale_timesteps(t))
 
-            x_0 = self.sde._predict_xstart_from_eps(x["sample"], t, eps) # x_0 = x_\theta(x_t)
+            x_0 = self.sde._predict_xstart_from_eps(x_prev, t, eps) # x_0 = x_\theta(x_t)
             x_prev = x_0
             A_x0 = self.degradation(x_prev)
 

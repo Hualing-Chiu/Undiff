@@ -45,7 +45,7 @@ if __name__=="__main__":
         generated_w2, sr = torchaudio.load(os.path.join(generated_path, f"Sample_{i}_2.wav"))
         # generated_w3, sr = torchaudio.load(os.path.join(generated_path, f"Sample_{i}_3.wav"))
         # degraded_w, sr = torchaudio.load(os.path.join(degraded_path, f"Sample_{i}.wav")) # mix 的語音
-        # 
+    
         original_w = torch.cat([original_w1, original_w2], -1).view(1, 1, -1)
         generated_signals = [generated_w1, generated_w2]
         generated_ws = [torch.cat(perm, -1).view(1, 1, -1) for perm in permutations(generated_signals)]
