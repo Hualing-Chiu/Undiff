@@ -196,6 +196,8 @@ class BaseInverseTask(UnconditionalTask):
         for i, f in enumerate(zip(*files_dict.values())):
             x = self.load_audios(f, target_sample_rate, segment_size, device)
             x = self.prepare_audio_before_degradation(x)
+            print(segment_size)
+            print(x.shape)
 
             degraded_sample = self.degradation(x).cpu()
             sample = diffusion.p_sample_loop(
@@ -230,7 +232,7 @@ class BWETask(BaseInverseTask):
         return TaskType.BWE
 
     def degradation(self, x: torch.Tensor) -> torch.Tensor:
-        lp_filter = bwe_utils.get_FIR_lowpass(order=200, fc=2000, beta=1, sr=16000)
+        lp_filter = bwe_utils.get_FIR_lowpass(order=200, fc=4000, beta=1, sr=16000)
         return bwe_utils.apply_low_pass_firwin(x, lp_filter)
 
 
