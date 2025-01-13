@@ -1104,7 +1104,7 @@ class CorrectorVPConditional:
                 else:
                     eps = self.score_fn(x_prev, self.sde._scale_timesteps(t))
             x_0 = self.sde._predict_xstart_from_eps(x_prev, t, eps)
-            x_prev = x_0
+            x_prev = x_0.detach()
             # eps = self.sde._predict_eps_from_xstart(x, t, x["pred_xstart"])
             n_spk = x_prev.size(0) // y.size(0)
             # for i in range(steps):
@@ -1170,7 +1170,7 @@ class CorrectorVPConditional:
                 (y - A_x0).view(y.size(0), -1), dim=-1, ord=2
             ).mean()
             condition = torch.autograd.grad(
-                outputs=rec_norm, inputs=x_prev)[0]
+                outputs=rec_norm, inputs=x_prev, retain_graph=False)[0].detach()
 
             normguide = torch.linalg.norm(
                 condition) / (x_0.size(-1) ** 0.5)
@@ -1180,6 +1180,7 @@ class CorrectorVPConditional:
             x_prev = x_prev - s * condition
             if t[0] != 0:
                 x_prev = self.sde.q_sample(x_prev, t-1) # forward
+
         return x_prev.float(), condition
 
     def langevin_corrector_sliced(self, x, t, eps, y, condition=None):

@@ -216,6 +216,7 @@ class BaseInverseTask(UnconditionalTask):
         for i, f in enumerate(zip(*files_dict.values())):
             x = self.load_audios(f, target_sample_rate, segment_size, device)
             x = self.prepare_audio_before_degradation(x)
+            print(x.shape)
 
             degraded_sample = self.degradation(x).cpu()
             sample = diffusion.p_sample_loop(
@@ -315,7 +316,7 @@ class SourceSeparationTask(BaseInverseTask):
         # filtered_mic2_audio_files = [[file for file in files if "mic1" in file] for files in audio_files]
         n_samples = min([len(files) for files in audio_files])
 
-        return {f"spk{i}": random.sample(files, k=n_samples)  for i, files in enumerate(audio_files)}}
+        return {f"spk{i}": random.sample(files, k=n_samples)  for i, files in enumerate(audio_files)}
 
     def prepare_audio_before_degradation(self, x: List[torch.Tensor]) -> torch.Tensor:
         min_sample_length = min(map(lambda tensor: tensor.size(-1), x))
