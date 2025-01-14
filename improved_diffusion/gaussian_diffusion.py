@@ -600,7 +600,7 @@ class GaussianDiffusion:
 
             if sample_method in rg_exps:
                 assert corrector and degradation
-                img.requires_grad_(True)
+                # img.requires_grad_(True)
                 if i != 199:
                     y = degradation(orig_x)
                     img = corrector.update_fn_adaptive(
@@ -1105,6 +1105,7 @@ class CorrectorVPConditional:
                     eps = self.score_fn(x["sample"], self.sde._scale_timesteps(t))
             x_0 = self.sde._predict_xstart_from_eps(x["sample"], t, eps)
             x_prev = x_0.detach()
+            x_prev.requires_grad_(True)
             # eps = self.sde._predict_eps_from_xstart(x, t, x["pred_xstart"])
             n_spk = x_prev.size(0) // y.size(0)
             # for i in range(steps):
