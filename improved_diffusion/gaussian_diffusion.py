@@ -1158,7 +1158,7 @@ class CorrectorVPConditional:
                     eps = self.score_fn(x_prev, self.sde._scale_timesteps(t))
 
             x_0 = self.sde._predict_xstart_from_eps(x_prev, t, eps) # x_0 = x_\theta(x_t)
-            x_prev = x_0
+            x_prev = x_0.detach()
             A_x0 = self.degradation(x_prev)
 
             if len(y.shape) < 3 and len(A_x0.shape) < 3:
