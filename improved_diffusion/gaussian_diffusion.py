@@ -438,7 +438,7 @@ class GaussianDiffusion:
         sample_method=None,
         orig_x=None,
         degradation=None,
-        use_rg_bwe: bool = False,
+        use_rg_bwe: bool = True,
     ):
         """
         Generate samples from the model.
@@ -504,7 +504,7 @@ class GaussianDiffusion:
         degradation=None,
         measurement=None,
         measurement_cond_fn=None,
-        use_rg_bwe: bool = False,
+        use_rg_bwe: bool = True,
     ):
         """
         Generate samples from the model and yield intermediate samples from
@@ -581,7 +581,7 @@ class GaussianDiffusion:
                     clip_denoised=clip_denoised,
                     denoised_fn=denoised_fn,
                     model_kwargs=model_kwargs,
-                    degradation=degradation if sample_method == TaskType.BWE else None,
+                    degradation=degradation if sample_method == "BWE" else None,
                     orig_x=orig_x,
                 )
 
