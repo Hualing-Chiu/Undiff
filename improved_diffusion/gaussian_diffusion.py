@@ -1104,7 +1104,7 @@ class CorrectorVPConditional:
                 else:
                     eps = self.score_fn(x["sample"], self.sde._scale_timesteps(t))
             x_0 = self.sde._predict_xstart_from_eps(x["sample"], t, eps)
-            x_prev = x_0.detach()
+            x_prev = x_0
             # eps = self.sde._predict_eps_from_xstart(x, t, x["pred_xstart"])
             n_spk = x_prev.size(0) // y.size(0)
             # for i in range(steps):
@@ -1176,11 +1176,11 @@ class CorrectorVPConditional:
                 outputs=rec_norm, inputs=x_prev, retain_graph=False)[0].detach()
 
             normguide = torch.linalg.norm(
-                condition) / (x_0.size(-1) ** 0.5)
+                condition) / (x_prev.size(-1) ** 0.5)
             sigma = torch.sqrt(self.alphas[t])
             s = self.xi / (normguide * sigma + 1e-6)
 
-            x_prev = x_prev - s * condition
+            x_prev = (x_prev - s * condition).detach()
             if t[0] != 0:
                 x_prev = self.sde.q_sample(x_prev, t-1) # forward
 
