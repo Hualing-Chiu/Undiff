@@ -16,11 +16,11 @@ from improved_diffusion.inference_utils import calculate_all_metrics, log_result
 from improved_diffusion.metrics import Metric
 import gc
 from torch.cuda.amp import autocast
-# from speechbrain.inference.speaker import EncoderClassifier
+from speechbrain.inference.speaker import EncoderClassifier
 # from espnet2.bin.spk_inference import Speech2Embedding
 # from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model, Wav2Vec2ForSequenceClassification
 # speech2spk_embed = Speech2Embedding.from_pretrained(model_tag="espnet/voxcelebs12_ecapa_wavlm_joint")
-# classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
+classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
 # model_name = "superb/wav2vec2-base-superb-sid"
 # feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
 # wav2vec = Wav2Vec2ForSequenceClassification.from_pretrained(model_name).to('cuda')
@@ -369,7 +369,7 @@ class SourceSeparationTask(BaseInverseTask):
     #     return x[: x.size(0) // 2, :, :] + x[x.size(0) // 2 :, :, :]
         # return x[:, :, : x.size(-1) // 2] + x[:, :, x.size(-1) // 2 :]
     def degradation(self, x: torch.Tensor) -> torch.Tensor:
-         return torch.stack([s for s in torch.chunk(x, 3, dim=0)]).sum(0)
+         return torch.stack([s for s in torch.chunk(x, 2, dim=0)]).sum(0)
 
     def inference(
         self,
@@ -393,6 +393,17 @@ class SourceSeparationTask(BaseInverseTask):
             x = self.prepare_audio_before_degradation(x)
             print(x.shape)
             degraded_sample = self.degradation(x).cpu()
+
+            reference_1 = random.choice([file for file in files_dict[files_key[0]] if file not in f[0]])
+            reference_2 = random.choice([file for file in files_dict[files_key[1]] if file not in f[1]])
+            reference_f = (reference_1, reference_2)
+            r_x = self.load_audios(reference_f, target_sample_rate, segment_size, device)
+            r_x = self.prepare_audio_before_degradation(r_x)
+
+            with torch.no_grad():
+                r_embeddings = classifier.encode_batch(r_x.squeeze(1))
+
+            # multi sample
             sample_list = []
             for _ in tqdm(range(num_runs)):
                 sample = diffusion.p_sample_loop(
@@ -404,7 +415,7 @@ class SourceSeparationTask(BaseInverseTask):
                     orig_x=x,
                     progress=True,
                     degradation=self.degradation,
-                    task_kwargs= None
+                    task_kwargs= {'r_e': r_embeddings}
                 ).cpu()
 
                 sample_list.append(sample)
