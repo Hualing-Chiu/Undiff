@@ -1126,7 +1126,7 @@ class CorrectorVPConditional:
                     loss2 = -F.cosine_similarity(embedding, temp_embedding, dim=-1)
                 temp_embedding = embedding
                 loss += loss1 + loss2
-            #         x_prev.requires_grad_(True)
+            print(f"loss: {loss}")
             #         window_size = 0.5
             #         step_size = 0.25
             #         segment_length = int(window_size * 16000)
@@ -1159,7 +1159,7 @@ class CorrectorVPConditional:
             log_p_y_x = repeat(log_p_y_x, "h ... -> (r h) ...", r=n_spk)
             # log_p_y_x = torch.vmap(lambda x,y:x/y)(log_p_y_x, 2-2*torch.tensor(self.sde.alphas_cumprod, device=t.device)[t[:y.size(0)]])
             x_prev = (x_prev + log_p_y_x/n_spk
-            + torch.vmap(lambda a,b: a*b)(s1, condition1) * 0.5)
+            + torch.vmap(lambda a,b: a*b)(s1, condition1) * 0.5).detach()
             condition = None
             if t[0] != 0:
                 x_prev = self.sde.q_sample(x_prev, t-1)
