@@ -293,11 +293,12 @@ class SourceSeparationTask(BaseInverseTask):
         return TaskType.SOURCE_SEPARATION
 
     def prepare_data(self, audio_files: List[List[str]]):
-        filtered_mic2_audio_files = [[file for file in files if "mic1" in file] for files in audio_files]
-        n_samples = min([len(files) for files in filtered_mic2_audio_files])
+        # filtered_mic2_audio_files = [[file for file in files if "mic1" in file] for files in audio_files]
+        filtered_audio_files = [[file for file in files if file.endswith('wav')] for files in audio_files]
+        n_samples = min([len(files) for files in filtered_audio_files])
 
         return {f"spk{i}": random.sample(files, k=n_samples)
-                for i, files in enumerate(filtered_mic2_audio_files)}
+                for i, files in enumerate(filtered_audio_files)}
 
     def prepare_audio_before_degradation(self, x: List[torch.Tensor]) -> torch.Tensor:
         min_sample_length = min(map(lambda tensor: tensor.size(-1), x))

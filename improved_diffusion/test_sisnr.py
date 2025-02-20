@@ -10,7 +10,7 @@ import torchaudio
 from inference_utils import calculate_all_metrics, log_results
 import logging
 
-logging.basicConfig(filename='/home/hualing/Undiff/results/source_separation_inference/each_sisnr.txt', level=logging.INFO, format='%(message)s')
+logging.basicConfig(filename='/home/hualing/Undiff/results/source_separation_inference/degraded.txt', level=logging.INFO, format='%(message)s')
 
 def SiSNR(real_samples, samples):
     alpha = (samples * real_samples).sum(-1, keepdims=True) / (
@@ -44,10 +44,10 @@ if __name__=="__main__":
         generated_w1, sr = torchaudio.load(os.path.join(generated_path, f"Sample_{i}_1.wav"))
         generated_w2, sr = torchaudio.load(os.path.join(generated_path, f"Sample_{i}_2.wav"))
         generated_w3, sr = torchaudio.load(os.path.join(generated_path, f"Sample_{i}_3.wav"))
-        # degraded_w, sr = torchaudio.load(os.path.join(degraded_path, f"Sample_{i}.wav")) # mix 的語音
+        degraded_w, sr = torchaudio.load(os.path.join(degraded_path, f"Sample_{i}.wav")) # mix 的語音
 
         original_w = torch.cat([original_w1, original_w2, original_w3], -1).view(1, 1, -1)
-        generated_signal = [generated_w1, generated_w2, generated_w3]
+        generated_signal = [degraded_w, degraded_w, degraded_w]
         generated_ws = [torch.cat(perm, -1).view(1, 1, -1) for perm in permutations(generated_signal)]
         # print(len(generated_ws))
         # degraded_cat_w = torch.cat([degraded_w, degraded_w], -1).view(1, 1, -1)
