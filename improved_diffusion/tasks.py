@@ -16,11 +16,11 @@ from improved_diffusion.inference_utils import calculate_all_metrics, log_result
 from improved_diffusion.metrics import Metric
 import gc
 from torch.cuda.amp import autocast
-from speechbrain.inference.speaker import EncoderClassifier
+# from speechbrain.inference.speaker import EncoderClassifier
 # from espnet2.bin.spk_inference import Speech2Embedding
 # from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model, Wav2Vec2ForSequenceClassification
 # speech2spk_embed = Speech2Embedding.from_pretrained(model_tag="espnet/voxcelebs12_ecapa_wavlm_joint")
-classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
+# classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
 # model_name = "superb/wav2vec2-base-superb-sid"
 # feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
 # wav2vec = Wav2Vec2ForSequenceClassification.from_pretrained(model_name).to('cuda')
@@ -317,9 +317,9 @@ class SourceSeparationTask(BaseInverseTask):
         return TaskType.SOURCE_SEPARATION
 
     def prepare_data(self, audio_files: List[str]):
-        # filtered_mic2_audio_files = [[file for file in files if "mic1" in file] for files in audio_files]
-        filtered_audio_files = [[file for file in files if file.endswith('wav')] for files in audio_files]
-        n_samples = min([len(files) for files in filtered_audio_files])
+        filtered_mic2_audio_files = [[file for file in files if "mic1" in file] for files in audio_files]
+        # filtered_audio_files = [[file for file in files if file.endswith('wav')] for files in audio_files]
+        n_samples = min([len(files) for files in filtered_mic2_audio_files])
 
         return {f"spk{i}": random.sample(files, k=n_samples)  for i, files in enumerate(filtered_mic2_audio_files)}
 
@@ -395,14 +395,14 @@ class SourceSeparationTask(BaseInverseTask):
             print(x.shape)
             degraded_sample = self.degradation(x).cpu()
 
-            reference_1 = random.choice([file for file in files_dict[files_key[0]] if file not in f[0]])
-            reference_2 = random.choice([file for file in files_dict[files_key[1]] if file not in f[1]])
-            reference_f = (reference_1, reference_2)
-            r_x = self.load_audios(reference_f, target_sample_rate, segment_size, device)
-            r_x = self.prepare_audio_before_degradation(r_x)
+            # reference_1 = random.choice([file for file in files_dict[files_key[0]] if file not in f[0]])
+            # reference_2 = random.choice([file for file in files_dict[files_key[1]] if file not in f[1]])
+            # reference_f = (reference_1, reference_2)
+            # r_x = self.load_audios(reference_f, target_sample_rate, segment_size, device)
+            # r_x = self.prepare_audio_before_degradation(r_x)
 
-            with torch.no_grad():
-                r_embeddings = classifier.encode_batch(r_x.squeeze(1))
+            # with torch.no_grad():
+            #     r_embeddings = classifier.encode_batch(r_x.squeeze(1))
 
             # multi sample
             sample_list = []
@@ -416,7 +416,7 @@ class SourceSeparationTask(BaseInverseTask):
                     orig_x=x,
                     progress=True,
                     degradation=self.degradation,
-                    task_kwargs= {'r_e': r_embeddings}
+                    task_kwargs= {'r_e': None} # r_embeddings
                 ).cpu()
 
                 sample_list.append(sample)
@@ -428,33 +428,24 @@ class SourceSeparationTask(BaseInverseTask):
             real_samples.append(x)
             # samples_tensor = torch.stack(sample_list, dim=0)
             # batch permutation
-            B = x.shape[0] # batch num = speaker num
+            # B = x.shape[0] # batch num = speaker num
             samples_sum = sample_list[0].clone() # (B, C, T)
+            frame_size = int(0.5 * 16000)
             for j in range(1, num_runs):
                 sample_next = sample_list[j]
                 base_sample = sample_list[0]
-                best_perm = None
-                best_score = float("-inf")
-                for perm in itertools.permutations(range(B)):
-                    reordered_sample = sample_next[list(perm)]
-                    sisnr_score = sum(self.sisnr(base_sample[k], reordered_sample[k]) for k in range(B))
+                sample_next = self.framewise_reorder(sample_next, base_sample, frame_size)
+                # best_perm = None
+                # best_score = float("-inf")
+                # for perm in itertools.permutations(range(B)):
+                #     reordered_sample = sample_next[list(perm)]
+                #     sisnr_score = sum(self.sisnr(base_sample[k], reordered_sample[k]) for k in range(B))
                 
-                    if sisnr_score > best_score:
-                        best_score = sisnr_score
-                        best_perm = perm
+                #     if sisnr_score > best_score:
+                #         best_score = sisnr_score
+                #         best_perm = perm
 
-                sample_next = sample_next[list(best_perm)]
-                # A1, A2 = sample_list[0][0], sample_list[0][1]
-                # B1, B2 = sample_next[0], sample_next[1]
-
-                # cal sisnr
-                # score_A1_B1 = self.sisnr(A1, B1)
-                # score_A1_B2 = self.sisnr(A1, B2)
-
-                # if score_A1_B2 > score_A1_B1:
-                #     B1, B2 = B2, B1
-
-                # sample_next = torch.stack([B1, B2], dim=0)
+                # sample_next = sample_next[list(best_perm)]
                 samples_sum += sample_next
                 del sample_next
                 torch.cuda.empty_cache()
@@ -475,6 +466,30 @@ class SourceSeparationTask(BaseInverseTask):
             fake_samples, self.metrics, reference_wavs=real_samples
         )
         log_results(results_dir=self.output_dir, res=scores)
+
+    def framewise_reorder(self, sample_next, base_sample, frame_size):
+        B, C, T = sample_next.shape
+        frame_num = T // frame_size
+        reordered_sample = torch.zeros_like(sample_next)
+        
+        for f in range(frame_num):
+            start = f * frame_size
+            end = start + frame_size
+            best_perm = None
+            best_score = float("-inf")
+            for perm in itertools.permutations(range(B)):
+                # reordered_sample = sample_next[list(perm)]
+                sisnr_score = sum(
+                    self.sisnr(base_sample[k, :, start:end], sample_next[list(perm)][k, :, start:end])
+                    for k in range(B)    
+                )
+
+                if sisnr_score > best_score:
+                    best_score = sisnr_score
+                    best_perm = perm
+
+            reordered_sample[:, :, start:end] = sample_next[list(best_perm), :, start:end]
+        return reordered_sample
 
     def sisnr(self, x, y):
         alpha = (x * y).sum(-1, keepdims=True) / (

@@ -4,7 +4,7 @@ defaults:
   - diffusion: gaussian_diffusion
   - _self_
 
-output_dir: results_2_spk_libriTTS/source_separation_inference
+output_dir: results_2_spk_5_frame/source_separation_inference
 audio_dir: /home/public_datasets/VCTK-Corpus-0.92/wav48_silence_trimmed # /home/public_datasets/VCTK-Corpus-0.92/wav48_silence_trimmed/p254 
 use_ema: false
 segment_size: null

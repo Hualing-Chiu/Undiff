@@ -17,12 +17,12 @@ from .losses import discretized_gaussian_log_likelihood, normal_kl
 from .nn import mean_flat
 from .tasks import TaskType
 
-from speechbrain.inference.speaker import EncoderClassifier
+# from speechbrain.inference.speaker import EncoderClassifier
 # from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model, Wav2Vec2ForSequenceClassification
 # from espnet2.bin.spk_inference import Speech2Embedding
 
 # speech2spk_embed = Speech2Embedding.from_pretrained(model_tag="espnet/voxcelebs12_ecapa_wavlm_joint")
-classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
+# classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
 # model_name = "superb/wav2vec2-base-superb-sid"
 # feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
 # wav2vec = Wav2Vec2ForSequenceClassification.from_pretrained(
@@ -1104,62 +1104,42 @@ class CorrectorVPConditional:
                 else:
                     eps = self.score_fn(x["sample"], self.sde._scale_timesteps(t))
             x_0 = self.sde._predict_xstart_from_eps(x["sample"], t, eps)
-            x_prev = x_0.detach()
-            x_prev.requires_grad_(True)
+            x_prev = x_0
+            # x_prev.requires_grad_(True)
             # eps = self.sde._predict_eps_from_xstart(x, t, x["pred_xstart"])
             n_spk = x_prev.size(0) // y.size(0)
             # for i in range(steps):
-            #     log_p_y_x = y - (
-            #         torch.stack(torch.chunk(x_prev, n_spk, 0)).sum(0)
-            #     )
-            #     log_p_y_x = repeat(log_p_y_x, "h ... -> (r h) ...", r=n_spk)
-            #     x_prev = x_prev + log_p_y_x/n_spk
-            r_embeddings = task_kwargs['r_e']
-            embeddings = classifier.encode_batch(x_prev.squeeze(1))
-            loss = 0
-            for i in range(n_spk):
-                embedding = embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
-                r_embedding = r_embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
-                loss1 = F.cosine_similarity(embedding, r_embedding, dim=-1)
-                loss2 = 0
-                if i != 0:
-                    loss2 = -F.cosine_similarity(embedding, temp_embedding, dim=-1)
-                temp_embedding = embedding
-                loss += loss1 + loss2
-            print(f"loss: {loss}")
-            #         window_size = 0.5
-            #         step_size = 0.25
-            #         segment_length = int(window_size * 16000)
-            #         step_length = int(step_size * 16000)
-            #         frame = F.unfold(x_prev[..., None], (segment_length, 1), stride=(step_length, 1)).transpose(1, -1).contiguous()
-            #         frame = frame.view(-1, frame.shape[-1])
-            #         embeddings = classifier.encode_batch(frame)
-            #         # print(f"embeddings: {embeddings.shape}")
-            #         similarity = 0
-            #         frame_num = embeddings.size(0) // x_prev.size(0)
-            #         r_embeddings = repeat(r_embeddings, "h ... -> (h r) ...", r=frame_num)
-            #         loss = F.mse_loss(embeddings, r_embeddings, reduction='mean')
-            #         print(f"loss: {loss}")
+            
+            # r_embeddings = task_kwargs['r_e']
+            # embeddings = classifier.encode_batch(x_prev.squeeze(1))
+            # loss = 0
+            # for i in range(n_spk):
+            #     embedding = embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
+            #     r_embedding = r_embeddings[i * y.size(0):(i + 1) * y.size(0), ...]
+            #     loss1 = F.cosine_similarity(embedding, r_embedding, dim=-1)
+            #     loss2 = 0
+            #     if i != 0:
+            #         loss2 = -F.cosine_similarity(embedding, temp_embedding, dim=-1)
+            #     temp_embedding = embedding
+            #     loss += loss1 + loss2
+            # print(f"loss: {loss}")
 
-            condition1 = torch.autograd.grad(
-                    outputs=loss, inputs=x_prev, retain_graph=True)[0]
-            # condition2 = torch.autograd.grad(
-            #         outputs=loss2, inputs=x_prev, retain_graph=True)[0]
-            normguide1 = torch.linalg.norm(
-                    condition1) / (x_prev.size(-1) ** 0.5)
-            # normguide2 = torch.linalg.norm(
-            #         condition2) / (x_prev.size(-1) ** 0.5)
-            sigma = torch.sqrt(self.alphas[t])
-            s1 = self.xi / (normguide1 * sigma + 1e-6)
-            # s2 = self.xi / (normguide2 * sigma + 1e-6)
+            # condition1 = torch.autograd.grad(
+            #         outputs=loss, inputs=x_prev, retain_graph=True)[0]
+
+            # normguide1 = torch.linalg.norm(
+            #         condition1) / (x_prev.size(-1) ** 0.5)
+
+            # sigma = torch.sqrt(self.alphas[t])
+            # s1 = self.xi / (normguide1 * sigma + 1e-6)
 
             log_p_y_x = y - (
                 torch.stack(torch.chunk(x_prev, n_spk, 0)).sum(0)
             )
             log_p_y_x = repeat(log_p_y_x, "h ... -> (r h) ...", r=n_spk)
             # log_p_y_x = torch.vmap(lambda x,y:x/y)(log_p_y_x, 2-2*torch.tensor(self.sde.alphas_cumprod, device=t.device)[t[:y.size(0)]])
-            x_prev = (x_prev + log_p_y_x/n_spk
-            + torch.vmap(lambda a,b: a*b)(s1, condition1) * 0.5).detach()
+            x_prev = x_prev + log_p_y_x/n_spk
+            # + torch.vmap(lambda a,b: a*b)(s1, condition1) * 0.5).detach()
             condition = None
             if t[0] != 0:
                 x_prev = self.sde.q_sample(x_prev, t-1)
