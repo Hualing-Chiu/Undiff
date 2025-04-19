@@ -6,7 +6,8 @@ from hydra.core.hydra_config import HydraConfig
 
 from . import gaussian_diffusion as gd
 from .respace import SpacedDiffusion, space_timesteps
-from .unet import SuperResModel
+# from .unet import SuperResModel
+from .unet import UNetModel
 
 NUM_CLASSES = 1000
 
@@ -113,20 +114,30 @@ def sr_create_model(
     for res in attention_resolutions.split(","):
         attention_ds.append(large_size // int(res))
 
-    return SuperResModel(
-        in_channels=3,
+    # return SuperResModel(
+    #     in_channels=3,
+    #     model_channels=num_channels,
+    #     out_channels=(3 if not learn_sigma else 6),
+    #     num_res_blocks=num_res_blocks,
+    #     attention_resolutions=tuple(attention_ds),
+    #     dropout=dropout,
+    #     channel_mult=channel_mult,
+    #     num_classes=(NUM_CLASSES if class_cond else None),
+    #     use_checkpoint=use_checkpoint,
+    #     num_heads=num_heads,
+    #     num_heads_upsample=num_heads_upsample,
+    #     use_scale_shift_norm=use_scale_shift_norm,
+    # )
+    return UNetModel(
+        image_size=16000,
+        in_channels=1,
         model_channels=num_channels,
-        out_channels=(3 if not learn_sigma else 6),
-        num_res_blocks=num_res_blocks,
+        out_channels=1,
         attention_resolutions=tuple(attention_ds),
-        dropout=dropout,
         channel_mult=channel_mult,
-        num_classes=(NUM_CLASSES if class_cond else None),
-        use_checkpoint=use_checkpoint,
-        num_heads=num_heads,
-        num_heads_upsample=num_heads_upsample,
-        use_scale_shift_norm=use_scale_shift_norm,
-    )
+        dims=1,
+        use_checkpoint=True
+    ) 
 
 
 def create_gaussian_diffusion(

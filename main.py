@@ -15,9 +15,10 @@ def instantiate_model_and_diffusion(cfg, device):
 
     # load checkpoint
     pl_ckpt = torch.load(cfg.model.ckpt_path, map_location="cpu")
-    model_state = improved_diffusion.remove_prefix_from_state_dict(
-        pl_ckpt["state_dict"], j=1
-    )
+    # print(pl_ckpt.keys())
+    # model_state = improved_diffusion.remove_prefix_from_state_dict(
+    #     pl_ckpt["state_dict"], j=1
+    # )
 
     # load ema
     if cfg.use_ema:
@@ -27,7 +28,7 @@ def instantiate_model_and_diffusion(cfg, device):
         )
 
     # load state_dict
-    model.load_state_dict(model_state)
+    model.load_state_dict(pl_ckpt)
     model.to(device)
     model.eval()
 

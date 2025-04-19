@@ -28,8 +28,6 @@ from .tasks import TaskType
 # wav2vec = Wav2Vec2ForSequenceClassification.from_pretrained(
 #     model_name).to('cuda')
 
-# classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
-
 def get_named_beta_schedule(schedule_name, num_diffusion_timesteps):
     """
     Get a pre-defined beta schedule for the given name.
@@ -344,6 +342,7 @@ class GaussianDiffusion:
             if self.model_mean_type == ModelMeanType.START_X:
                 pred_xstart = process_xstart(model_output)
             else:
+                # print("_predict_xstart_from_eps")
                 pred_xstart = process_xstart(
                     self._predict_xstart_from_eps(x_t=x, t=t, eps=model_output)
                 )
@@ -595,8 +594,10 @@ class GaussianDiffusion:
         if use_rg_bwe:
             rg_exps.add(TaskType.BWE)
 
-        for i in indices:
+        out = {"sample": img}
+        for i in indices: # reverse
             t = th.tensor([i] * shape[0], device=device)
+            # print(t) t=200 199 198 197...
 
             if sample_method in rg_exps:
                 assert corrector and degradation
@@ -607,24 +608,26 @@ class GaussianDiffusion:
                         None, img, t, y, threshold=200, steps=1, source_separation=False,
                         task_kwargs=task_kwargs,
                     )
-
-            with th.no_grad():
-                out = self.p_sample(
-                    model,
-                    img,
-                    t,
-                    clip_denoised=clip_denoised,
-                    denoised_fn=denoised_fn,
-                    model_kwargs=model_kwargs,
-                    degradation=degradation if sample_method == "BWE" else None, # TaskType.BWE
-                    orig_x=orig_x,
-                )
+                out["sample"] = img
+                
+            # start from here
+            # with th.no_grad():
+            #     out = self.p_sample( # return 出來的是 x_198
+            #         model,
+            #         img,
+            #         t,
+            #         clip_denoised=clip_denoised,
+            #         denoised_fn=denoised_fn,
+            #         model_kwargs=model_kwargs,
+            #         degradation=degradation if sample_method == "BWE" else None, # TaskType.BWE
+            #         orig_x=orig_x,
+            #     )
 
             if sample_method == TaskType.SOURCE_SEPARATION:
                 assert corrector and degradation
                 y = degradation(orig_x)
                 img = corrector.update_fn_adaptive(
-                    out, img, t, y, threshold=150, steps=4, source_separation=True,
+                    out, img, t, y, threshold=150, steps=4, source_separation=True, # out 是 x_198，但 t 還是 199
                     task_kwargs=task_kwargs,
                 )
                 out["sample"] = img
@@ -1137,7 +1140,7 @@ class CorrectorVPConditional:
                 torch.stack(torch.chunk(x_prev, n_spk, 0)).sum(0)
             )
             log_p_y_x = repeat(log_p_y_x, "h ... -> (r h) ...", r=n_spk)
-            # log_p_y_x = torch.vmap(lambda x,y:x/y)(log_p_y_x, 2-2*torch.tensor(self.sde.alphas_cumprod, device=t.device)[t[:y.size(0)]])
+        
             x_prev = x_prev + log_p_y_x/n_spk
             # + torch.vmap(lambda a,b: a*b)(s1, condition1) * 0.5).detach()
             condition = None

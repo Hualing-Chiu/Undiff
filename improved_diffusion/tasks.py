@@ -370,7 +370,7 @@ class SourceSeparationTask(BaseInverseTask):
     #     return x[: x.size(0) // 2, :, :] + x[x.size(0) // 2 :, :, :]
         # return x[:, :, : x.size(-1) // 2] + x[:, :, x.size(-1) // 2 :]
     def degradation(self, x: torch.Tensor) -> torch.Tensor:
-         return torch.stack([s for s in torch.chunk(x, 2, dim=0)]).sum(0)
+        return torch.stack([s for s in torch.chunk(x, 2, dim=0)]).sum(0)
 
     def inference(
         self,
@@ -380,7 +380,7 @@ class SourceSeparationTask(BaseInverseTask):
         target_sample_rate: int = 16000,
         segment_size: Optional[int] = None,
         device: str = "cpu",
-        num_runs: int = 5
+        num_runs: int = 1
     ):
         assert self.task_type != TaskType.UNCONDITIONAL  # inverse tasks only
         files_dict = self.prepare_data(audio_files)
@@ -416,7 +416,7 @@ class SourceSeparationTask(BaseInverseTask):
                     orig_x=x,
                     progress=True,
                     degradation=self.degradation,
-                    task_kwargs= {'r_e': None} # r_embeddings
+                    task_kwargs= None # {'r_e': r_embeddings}
                 ).cpu()
 
                 sample_list.append(sample)
@@ -428,24 +428,24 @@ class SourceSeparationTask(BaseInverseTask):
             real_samples.append(x)
             # samples_tensor = torch.stack(sample_list, dim=0)
             # batch permutation
-            # B = x.shape[0] # batch num = speaker num
+            B = x.shape[0] # batch num = speaker num
             samples_sum = sample_list[0].clone() # (B, C, T)
-            frame_size = int(0.5 * 16000)
+            frame_size = int(0.1 * 16000)
             for j in range(1, num_runs):
                 sample_next = sample_list[j]
                 base_sample = sample_list[0]
-                sample_next = self.framewise_reorder(sample_next, base_sample, frame_size)
-                # best_perm = None
-                # best_score = float("-inf")
-                # for perm in itertools.permutations(range(B)):
-                #     reordered_sample = sample_next[list(perm)]
-                #     sisnr_score = sum(self.sisnr(base_sample[k], reordered_sample[k]) for k in range(B))
+                # sample_next = self.framewise_reorder(sample_next, base_sample, frame_size)
+                best_perm = None
+                best_score = float("-inf")
+                for perm in itertools.permutations(range(B)):
+                    reordered_sample = sample_next[list(perm)]
+                    sisnr_score = sum(self.sisnr(base_sample[k], reordered_sample[k]) for k in range(B))
                 
-                #     if sisnr_score > best_score:
-                #         best_score = sisnr_score
-                #         best_perm = perm
+                    if sisnr_score > best_score:
+                        best_score = sisnr_score
+                        best_perm = perm
 
-                # sample_next = sample_next[list(best_perm)]
+                sample_next = sample_next[list(best_perm)]
                 samples_sum += sample_next
                 del sample_next
                 torch.cuda.empty_cache()
@@ -467,29 +467,29 @@ class SourceSeparationTask(BaseInverseTask):
         )
         log_results(results_dir=self.output_dir, res=scores)
 
-    def framewise_reorder(self, sample_next, base_sample, frame_size):
-        B, C, T = sample_next.shape
-        frame_num = T // frame_size
-        reordered_sample = torch.zeros_like(sample_next)
+    # def framewise_reorder(self, sample_next, base_sample, frame_size):
+    #     B, C, T = sample_next.shape
+    #     frame_num = T // frame_size
+    #     reordered_sample = torch.zeros_like(sample_next)
         
-        for f in range(frame_num):
-            start = f * frame_size
-            end = start + frame_size
-            best_perm = None
-            best_score = float("-inf")
-            for perm in itertools.permutations(range(B)):
-                # reordered_sample = sample_next[list(perm)]
-                sisnr_score = sum(
-                    self.sisnr(base_sample[k, :, start:end], sample_next[list(perm)][k, :, start:end])
-                    for k in range(B)    
-                )
+    #     for f in range(frame_num):
+    #         start = f * frame_size
+    #         end = start + frame_size
+    #         best_perm = None
+    #         best_score = float("-inf")
+    #         for perm in itertools.permutations(range(B)):
+    #             # reordered_sample = sample_next[list(perm)]
+    #             sisnr_score = sum(
+    #                 self.sisnr(base_sample[k, :, start:end], sample_next[list(perm)][k, :, start:end])
+    #                 for k in range(B)    
+    #             )
 
-                if sisnr_score > best_score:
-                    best_score = sisnr_score
-                    best_perm = perm
+    #             if sisnr_score > best_score:
+    #                 best_score = sisnr_score
+    #                 best_perm = perm
 
-            reordered_sample[:, :, start:end] = sample_next[list(best_perm), :, start:end]
-        return reordered_sample
+    #         reordered_sample[:, :, start:end] = sample_next[list(best_perm), :, start:end]
+    #     return reordered_sample
 
     def sisnr(self, x, y):
         alpha = (x * y).sum(-1, keepdims=True) / (
