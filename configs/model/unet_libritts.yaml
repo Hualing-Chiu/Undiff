@@ -1,5 +1,5 @@
 model:
-  _target_: improved_diffusion.UNetModel
+  _target_: improved_diffusion.unet_libritts.UNetModel
   image_size: 16000
   in_channels: 1
   model_channels: 32
@@ -9,5 +9,6 @@ model:
   channel_mult: [1, 2, 2, 4, 4, 8, 8, 16, 16]
   dims: 1
   use_checkpoint: True
+  num_head_channels: 32
 
-ckpt_path: weights/ema_unet.pt
+ckpt_path: weights/unet_libritts.pt

@@ -28,7 +28,7 @@ def instantiate_model_and_diffusion(cfg, device):
         )
 
     # load state_dict
-    model.load_state_dict(pl_ckpt)
+    model.load_state_dict(pl_ckpt, strict=False)
     model.to(device)
     model.eval()
 

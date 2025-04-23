@@ -623,12 +623,13 @@ class GaussianDiffusion:
             #         orig_x=orig_x,
             #     )
 
+            # start here
             if sample_method == TaskType.SOURCE_SEPARATION:
                 assert corrector and degradation
                 y = degradation(orig_x)
                 img = corrector.update_fn_adaptive(
                     out, img, t, y, threshold=150, steps=4, source_separation=True, # out 是 x_198，但 t 還是 199
-                    task_kwargs=task_kwargs,
+                    task_kwargs=task_kwargs, clip_denoised=clip_denoised
                 )
                 out["sample"] = img
 
@@ -1037,18 +1038,18 @@ class CorrectorVPConditional:
 
     def update_fn_adaptive(
         self, x, x_prev, t, y, threshold=150, steps=1, source_separation=False,
-        task_kwargs=None,
+        task_kwargs=None, clip_denoised=True
     ):
         x, condition = self.update_fn(
-            x, x_prev, t, y, steps, source_separation, task_kwargs=task_kwargs)
+            x, x_prev, t, y, steps, source_separation, task_kwargs=task_kwargs, clip_denoised=clip_denoised)
 
-        if t[0] < threshold and t[0] > 0:
-            if self.sde.input_sigma_t:
-                eps = self.score_fn(
-                    x, _extract_into_tensor(self.sde.beta_variance, t, t.shape)
-                )
-            else:
-                eps = self.score_fn(x, self.sde._scale_timesteps(t))
+        # if t[0] < threshold and t[0] > 0:
+        #     if self.sde.input_sigma_t:
+        #         eps = self.score_fn(
+        #             x, _extract_into_tensor(self.sde.beta_variance, t, t.shape)
+        #         )
+        #     else:
+        #         eps = self.score_fn(x, self.sde._scale_timesteps(t))
 
             # if condition is None:
             #     n_spk = x.size(0) // y.size(0)
@@ -1089,28 +1090,42 @@ class CorrectorVPConditional:
             #                  + torch.vmap(lambda a,b: a*b)(grad_1, weight_grad)
             #                  + torch.vmap(lambda a,b: a*b)(grad_2, weight_grad))
             #     condition = torch.vmap(lambda x,y:x/y)(condition, 2-2*torch.tensor(self.sde.alphas_cumprod, device=t.device)[t[:y.size(0)]])
-            if source_separation:
-                x = self.langevin_corrector_sliced(x, t, eps, y, condition)
-            else:
-                x = self.langevin_corrector(x, t, eps, y, condition)
+            # if source_separation:
+            #     x = self.langevin_corrector_sliced(x, t, eps, y, condition)
+            # else:
+            #     x = self.langevin_corrector(x, t, eps, y, condition)
 
         return x
 
-    def update_fn(self, x, x_prev, t, y, steps, source_separation, task_kwargs=None,):
+    def update_fn(self, x, x_prev, t, y, steps, source_separation, task_kwargs=None, clip_denoised=True):
         # condition = None
         if source_separation:
+            # prior
             with torch.no_grad():
                 if self.sde.input_sigma_t:
                     eps = self.score_fn(
-                        x["sample"], _extract_into_tensor(self.sde.beta_variance, t, t.shape)
+                        x_prev, _extract_into_tensor(self.sde.beta_variance, t, t.shape)
                     )
                 else:
-                    eps = self.score_fn(x["sample"], self.sde._scale_timesteps(t))
-            x_0 = self.sde._predict_xstart_from_eps(x["sample"], t, eps)
+                    eps = self.score_fn(x_prev, self.sde._scale_timesteps(t))
+            x_0 = self.sde._predict_xstart_from_eps(x_prev, t, eps)
+            if clip_denoised:
+                x_0 = x_0.clamp(-1, 1)
             x_prev = x_0
+            
+            # likelihood step
+            n_spk = x_prev.shape[0]
+            log_p_y_x = y - (
+                torch.stack(torch.chunk(x_prev, n_spk, 0)).sum(0)
+            )
+            log_p_y_x = repeat(log_p_y_x, "h ... -> (r h) ...", r=n_spk)
+        
+            x_prev = x_prev + log_p_y_x/n_spk
+            if t[0] != 0:
+                x_prev = self.sde.q_sample(x_prev, t)
+
             # x_prev.requires_grad_(True)
-            # eps = self.sde._predict_eps_from_xstart(x, t, x["pred_xstart"])
-            n_spk = x_prev.size(0) // y.size(0)
+            # n_spk = x_prev.size(0) // y.size(0)
             # for i in range(steps):
             
             # r_embeddings = task_kwargs['r_e']
@@ -1136,16 +1151,16 @@ class CorrectorVPConditional:
             # sigma = torch.sqrt(self.alphas[t])
             # s1 = self.xi / (normguide1 * sigma + 1e-6)
 
-            log_p_y_x = y - (
-                torch.stack(torch.chunk(x_prev, n_spk, 0)).sum(0)
-            )
-            log_p_y_x = repeat(log_p_y_x, "h ... -> (r h) ...", r=n_spk)
+            # log_p_y_x = y - (
+            #     torch.stack(torch.chunk(x_prev, n_spk, 0)).sum(0)
+            # )
+            # log_p_y_x = repeat(log_p_y_x, "h ... -> (r h) ...", r=n_spk)
         
-            x_prev = x_prev + log_p_y_x/n_spk
+            # x_prev = x_prev + log_p_y_x/n_spk
             # + torch.vmap(lambda a,b: a*b)(s1, condition1) * 0.5).detach()
             condition = None
-            if t[0] != 0:
-                x_prev = self.sde.q_sample(x_prev, t-1)
+            # if t[0] != 0:
+            #     x_prev = self.sde.q_sample(x_prev, t-1)
         else:
             with torch.no_grad():
                 if self.sde.input_sigma_t:

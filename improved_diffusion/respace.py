@@ -69,7 +69,6 @@ class SpacedDiffusion(GaussianDiffusion):
                           original diffusion process to retain.
     :param kwargs: the kwargs to create the base diffusion process.
     """
-
     def __init__(self, use_timesteps, **kwargs):
         self.use_timesteps = set(use_timesteps)
         self.timestep_map = []

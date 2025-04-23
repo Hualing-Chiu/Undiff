@@ -325,7 +325,8 @@ class SourceSeparationTask(BaseInverseTask):
 
     def prepare_audio_before_degradation(self, x: List[torch.Tensor]) -> torch.Tensor:
         min_sample_length = min(map(lambda tensor: tensor.size(-1), x))
-        truncated_x = list(map(lambda tensor: tensor[..., :min_sample_length], x))
+        truncated_x = list(map(lambda tensor: tensor[..., :min_sample_length], x))      
+        # normalized_x = [t - t.mean(dim=-1, keepdim=True) for t in truncated_x]
         return torch.cat(truncated_x, dim=0) # dim=-1 to dim=0
         # return torch.cat(truncated_x, dim=-1)
 
@@ -410,7 +411,7 @@ class SourceSeparationTask(BaseInverseTask):
                 sample = diffusion.p_sample_loop(
                     model,
                     x.shape,
-                    clip_denoised=False,
+                    clip_denoised=True,
                     model_kwargs={},
                     sample_method=self.task_type,
                     orig_x=x,
