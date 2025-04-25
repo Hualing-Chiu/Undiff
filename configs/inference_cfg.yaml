@@ -1,6 +1,6 @@
 defaults:
   - task: source_separation
-  - model: unet_libritts # diffwave
+  - model: diffwave # unet_libritts
   - diffusion: gaussian_diffusion
   - _self_
 
