@@ -1,5 +1,6 @@
 import os
 import random
+import json
 import itertools
 from abc import ABC, abstractmethod
 from enum import Enum, auto
@@ -119,7 +120,7 @@ class BaseInverseTask(UnconditionalTask):
     def __init__(self, output_dir: str, metrics: List[Metric]):
         super().__init__(output_dir, metrics)
 
-        for path in [self.generated_path, self.original_path, self.degraded_path, self.concatenate_path, self.diarization_path]:
+        for path in [self.generated_path, self.original_path, self.degraded_path, self.concatenate_path]:
             if not self.exists(path):
                 os.makedirs(path)
 
@@ -312,6 +313,16 @@ class VocodingTask(BaseInverseTask):
 
 
 class SourceSeparationTask(BaseInverseTask):
+    def __init__(self, output_dir: str, metrics: List[Metric]):
+        super().__init__(output_dir, metrics)
+        # load stats
+        self.stats_path = "/media/md01/home/hualing/Undiff/improved_diffusion/libritts_mean_variance.json"
+        with open(self.stats_path, "r") as f:
+            self.stats = json.load(f)
+
+        self.train_mean = self.stats["mean"]
+        self.train_std = self.stats["variance"] ** 0.5
+
     @property
     def task_type(self) -> TaskType:
         return TaskType.SOURCE_SEPARATION
@@ -327,8 +338,19 @@ class SourceSeparationTask(BaseInverseTask):
         min_sample_length = min(map(lambda tensor: tensor.size(-1), x))
         truncated_x = list(map(lambda tensor: tensor[..., :min_sample_length], x))      
         # normalized_x = [t - t.mean(dim=-1, keepdim=True) for t in truncated_x]
+        # normalize before degradation
+        # normalized_x = []
+        # self.input_mean = []
+        # self.input_std = []
+        # for t in truncated_x:
+        #     mean = t.mean(dim=-1, keepdim=True).to(t.device)
+        #     std = t.std(dim=-1, keepdim=True).to(t.device)
+        #     self.input_mean.append(mean)
+        #     self.input_std.append(std)
+        #     t_norm = (t - mean) / (std + 1e-9)
+        #     t_norm = t_norm * self.train_std + self.train_mean
+        #     normalized_x.append(t_norm)
         return torch.cat(truncated_x, dim=0) # dim=-1 to dim=0
-        # return torch.cat(truncated_x, dim=-1)
 
     def save_audios(
         self,
@@ -346,6 +368,9 @@ class SourceSeparationTask(BaseInverseTask):
             original_sample, chunks=n_spk, dim=0
         )  # explicit number of chunks 2
         for i, (cur_pred, cur_orig) in enumerate(zip(pred_chunked, orig_chunked)):
+            # print(f'cur_pred.device : {cur_pred.device}, self.input_mean[i].device : {self.input_mean[i].device}')
+            # cur_pred = (cur_pred - self.train_mean) / (self.train_std + 1e-9)
+            # cur_pred = cur_pred * self.input_std[i].to('cpu') + self.input_mean[i].to('cpu')
             name = f"Sample_{idx}_{i + 1}.wav"
             torchaudio.save(
                 os.path.join(self.generated_path, name), cur_pred.view(1, -1), sr

@@ -1,11 +1,12 @@
 defaults:
   - task: source_separation
-  - model: diffwave # unet_libritts
+  - model: unet_libritts # diffwave 
   - diffusion: gaussian_diffusion
   - _self_
 
-output_dir: results_unet_libritts_gt/source_separation_inference
-audio_dir: /home/public_datasets/VCTK-Corpus-0.92/wav48_silence_trimmed # /home/public_datasets/VCTK-Corpus-0.92/wav48_silence_trimmed/p254 
+output_dir: results_700k_libritts_test/source_separation_inference
+# stats_path: /media/md01/home/hualing/Undiff/improved_diffusion/vctk_mean_variance.json
+audio_dir: ??? # /home/public_datasets/VCTK-Corpus-0.92/wav48_silence_trimmed/p254 
 use_ema: false
 segment_size: null
 sampling_rate: 16000

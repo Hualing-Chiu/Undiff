@@ -11,4 +11,4 @@ model:
   use_checkpoint: True
   num_head_channels: 32
 
-ckpt_path: weights/unet_libritts.pt
+ckpt_path: weights/ema_0.9999_700000.pt
